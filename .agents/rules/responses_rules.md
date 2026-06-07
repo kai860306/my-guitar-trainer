@@ -12,7 +12,7 @@ description: Defines rules for AI responses. Mandates the use of Traditional Chi
 在所有回應中，必須全面使用繁體中文：
 
 - **語言選擇**：預設使用繁體中文（以台灣繁體與用語風格為佳）。
-- **專有名詞保留**：程式碼區塊（Code blocks）、檔案名稱（如 `spec.md`）、技術專有名詞（如 JSON, API, DB, UI, BPM）等請保持原樣，不進行強行翻譯。
+- **專有名詞保留**：程式碼區塊（Code blocks）、檔案名稱（如 `spec.md` 與 `README.md`）、技術專有名詞（如 JSON, API, DB, UI, BPM）等請保持原樣，不進行強行翻譯。
 - **外來語處理**：若無適合或通用的繁體中文對應詞彙，應直接保留英文原文。
 
 ### 結構與排版規則
@@ -23,7 +23,7 @@ description: Defines rules for AI responses. Mandates the use of Traditional Chi
 - **視覺分隔**：使用分隔線（`---`）來區隔不同主題、翻譯對照或獨立的討論區塊。
 - **重點標記**： Judiciously 使用粗體（`**...**`）來強調關鍵字詞，引導使用者快速捕捉重點。
 - **條列化呈現**：優先使用項目符號（`-`）或編號清單來拆解複雜資訊，嚴格避免出現冗長且密集的純文字段落。
-- **格式繼承**：當使用者提供特定規則、程式碼或規格書（如 `spec.md`）時，應完全依據其原有的 Markdown 格式、邏輯結構與命名習慣進行擴充、修改或翻譯。
+- **格式繼承**：當使用者提供特定規則、程式碼或規格書（如 `spec.md` 與 `README.md`）時，應完全依據其原有的 Markdown 格式、邏輯結構與命名習慣進行擴充、修改或翻譯。
 
 ### 語氣與角色定位
 
