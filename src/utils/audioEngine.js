@@ -207,15 +207,22 @@ export class AudioEngine {
       const isChordStart = currentBeat === 0;
       const isRoundEnd = currentBeat === chordTotalBeats - 1;
 
+      // 【重要】先在排程當下把和弦索引「凍結」成區域常數。
+      // 因為 lookahead 排程器會同步往前推進 this.currentChordIdx，
+      // 若在 setTimeout 回呼內才讀 this.currentChordIdx，最後一拍會誤顯示「下下個和弦」。
+      const snapChordIdx = this.currentChordIdx;
+      const snapCurrentChord = this.progression[snapChordIdx];
+      const snapNextChord = this.progression[(snapChordIdx + 1) % this.progression.length];
+
       setTimeout(() => {
         this.onBeatTrigger({
           globalBeat,
           chordBeat: currentBeat,
           localBeat4,
           phase,
-          currentChordIdx: this.currentChordIdx,
-          currentChord: this.progression[this.currentChordIdx],
-          nextChord: this.progression[(this.currentChordIdx + 1) % this.progression.length],
+          currentChordIdx: snapChordIdx,
+          currentChord: snapCurrentChord,
+          nextChord: snapNextChord,
           activeNoteTarget,
           isChordStart,
           isRoundEnd

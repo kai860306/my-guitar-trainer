@@ -4,14 +4,40 @@ export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A',
 export const STRING_OPENS = [4, 11, 7, 2, 9, 4]; // 1弦到6弦空弦音高
 
 // 順階級數對應的半音偏移量與調式公式 (相對於主調根音)
+//
+// 【資料模型設計】每個和弦字卡用一個統一結構描述，方便日後無限擴充：
+//   - offset   : 和弦根音相對於主調 Key 的半音距離 (0~11)
+//   - mode     : 該和弦對應的 7 音調式音階 (相對於「和弦根音」)，
+//                決定指板上哪些音會亮起、自訂音序器的調式映射、以及音程著色
+//   - family   : 'major' | 'minor' | 'dim' | 'dom'，用來判斷大/小調體系與階梯模式取音
+//   - label    : 顯示用的和弦性質文字 (maj / m / 7 / m7 / m7♭5 / dim7 ...)
+//   - modeName : 顯示用的調式名稱 (Ionian / Dorian ...)
+//
+// 想新增字卡時，只要在對應的分類區塊加一筆即可，三大引擎 (指板/音訊/爬音) 會自動支援。
 export const CHORD_MODES = {
-  'I': { offset: 0, mode: [0, 2, 4, 5, 7, 9, 11], alias: ['Δ', 'M', 'maj'] },
-  'ii': { offset: 2, mode: [0, 2, 3, 5, 7, 9, 10], alias: ['m', 'm7'] },
-  'iii': { offset: 4, mode: [0, 1, 3, 5, 7, 8, 10], alias: ['m', 'm7'] },
-  'IV': { offset: 5, mode: [0, 2, 4, 6, 7, 9, 11], alias: ['Δ', 'M', 'maj'] },
-  'V': { offset: 7, mode: [0, 2, 4, 5, 7, 9, 10], alias: ['7'] },
-  'vi': { offset: 9, mode: [0, 2, 3, 5, 7, 8, 10], alias: ['m', 'm7'] },
-  'vii°': { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], alias: ['dim', 'm7b5'] }
+  // ===== 順階三和弦 (大小調基礎) =====
+  'I':    { offset: 0,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj', modeName: 'Ionian' },
+  'ii':   { offset: 2,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm',   modeName: 'Dorian' },
+  'iii':  { offset: 4,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Phrygian' },
+  'IV':   { offset: 5,  mode: [0, 2, 4, 6, 7, 9, 11], family: 'major', label: 'maj', modeName: 'Lydian' },
+  'V':    { offset: 7,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'major', label: 'maj', modeName: 'Mixolydian' },
+  'vi':   { offset: 9,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Aeolian' },
+  'vii°': { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'dim', modeName: 'Locrian' },
+
+  // ===== 順階七和弦 (七度色彩，搭配三和弦使用) =====
+  'IM7':     { offset: 0,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj7', modeName: 'Ionian' },
+  'iim7':    { offset: 2,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm7',   modeName: 'Dorian' },
+  'iiim7':   { offset: 4,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Phrygian' },
+  'IVM7':    { offset: 5,  mode: [0, 2, 4, 6, 7, 9, 11], family: 'major', label: 'maj7', modeName: 'Lydian' },
+  'V7':      { offset: 7,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom',   label: '7',    modeName: 'Mixolydian' },
+  'vim7':    { offset: 9,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Aeolian' },
+  'viim7b5': { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian' },
+
+  // ===== 調外 / 借用和弦 (Modal Interchange，根音在調外) =====
+  'bIII': { offset: 3,  mode: [0, 2, 4, 5, 7, 9, 11],    family: 'major', label: 'maj',  modeName: 'Ionian (♭III)' },
+  'bVI':  { offset: 8,  mode: [0, 2, 4, 5, 7, 9, 11],    family: 'major', label: 'maj',  modeName: 'Ionian (♭VI)' },
+  'bVII': { offset: 10, mode: [0, 2, 4, 5, 7, 9, 10],    family: 'dom',   label: '7',    modeName: 'Mixolydian (♭VII)' },
+  'vii°7':{ offset: 11, mode: [0, 2, 3, 5, 6, 8, 9, 11], family: 'dim',   label: 'dim7', modeName: 'Diminished' }
 };
 
 // 嚴謹的 CAGED 各弦實體邊界字典（相對於該把位和弦根音的琴格距離）
@@ -147,8 +173,8 @@ export function generateCagedSequence(keyRoot, chordDegreeStr, formObj, stage, a
   const chordConfig = CHORD_MODES[chordDegreeStr];
   const chordRootAbs = (keyRoot + chordConfig.offset) % 12;
   
-  // 判斷該和弦是否為小調體系 (包含 m, m7)
-  const isMinor = chordConfig.alias.includes('m');
+  // 判斷該和弦是否為小調體系 (minor family)
+  const isMinor = chordConfig.family === 'minor';
   
   // 階段過濾器 (Stage 1-5)
   let allowedIntervals = [0, 2, 4, 5, 7, 9, 11]; // 預設大調全音階
@@ -245,7 +271,7 @@ export function getIntervalName(interval, chordDegreeStr) {
   if (interval === 0) return '1';
   
   const chordConfig = CHORD_MODES[chordDegreeStr];
-  const isMinor = chordConfig ? chordConfig.alias.includes('m') : false;
+  const isMinor = chordConfig ? chordConfig.family === 'minor' : false;
 
   const mapping = {
     1: isMinor ? '♭2' : '♭2',
@@ -270,7 +296,7 @@ export function getIntervalName(interval, chordDegreeStr) {
 export function getChordPitches(keyRoot, chordDegreeStr) {
   const chordConfig = CHORD_MODES[chordDegreeStr];
   const chordRootAbs = (keyRoot + chordConfig.offset) % 12;
-  const isMinor = chordConfig.alias.includes('m');
+  const isMinor = chordConfig.family === 'minor';
   
   // 建立大約在 C3 (130Hz) 附近的和弦配置 (Root, 5th, Octave, 3rd)
   // 基底 A2 = 110Hz。C3 = A2 + 3 個半音

@@ -10,11 +10,19 @@ const selectedProgressionName = ref('vi - IV - I - V');
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const customProgressionArray = ref([]);
-const availableChords = ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'];
-const draggedItem = ref(null);
+// 可用和弦庫 (依性質分類，方便日後擴充)
+const chordLibrary = [
+  { label: '順階三和弦', chords: ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'] },
+  { label: '順階七和弦', chords: ['IM7', 'iim7', 'iiim7', 'IVM7', 'V7', 'vim7', 'viim7b5'] },
+  { label: '調外 / 借用和弦', chords: ['bIII', 'bVI', 'bVII', 'vii°7'] }
+];
 const activeGap = ref(null);
-let isDroppedValid = false;
 const isCustomProgMode = ref(false);
+
+// 統一的指針拖曳狀態 (同時支援滑鼠與觸控)
+const progContainerRef = ref(null);
+const dragState = ref(null);
+const DRAG_THRESHOLD = 6;
 
 const bpm = ref(85);
 const allowOpenStrings = ref(true); // 永遠開啟開放弦，不再提供關閉選項
@@ -34,13 +42,40 @@ const currentPhase = ref('prep'); // prep, train, predict
 const localBeat4 = ref(0);
 const currentChord = ref('vi');
 const nextChord = ref('IV');
+const currentChordIdx = ref(0);
 const activeNoteTarget = ref(null);
 
 let trainerAudio = null;
 
 onMounted(() => {
   trainerAudio = new AudioEngine();
+  document.addEventListener('fullscreenchange', syncFullscreenState);
+  document.addEventListener('webkitfullscreenchange', syncFullscreenState);
 });
+
+// 🖥️ 全螢幕顯示
+const isFullscreen = ref(false);
+
+const syncFullscreenState = () => {
+  isFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement);
+};
+
+const toggleFullscreen = async () => {
+  try {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      if (el.requestFullscreen) await el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } else {
+      if (document.exitFullscreen) await document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+  } catch (e) {
+    // 部分行動瀏覽器 (如 iOS Safari) 不支援 Fullscreen API，
+    // 已透過 meta 標籤提供「加入主畫面」全螢幕的後備方案。
+    console.warn('Fullscreen API 不被支援：', e);
+  }
+};
 
 // 解析和弦進行級數
 const getActiveProgression = () => {
@@ -52,82 +87,98 @@ const getActiveProgression = () => {
     : ['I'];
 };
 
-const handleDragStart = (item, source) => {
-  draggedItem.value = { item, source };
-  isDroppedValid = false;
-};
-
-const handleDrop = () => {
-  if (!draggedItem.value) return;
-  isDroppedValid = true; // 標記為成功放置
-  const { item, source } = draggedItem.value;
-  
-  if (source === 'library') {
-    customProgressionArray.value.push({ id: generateId(), value: item });
-  } else if (source === 'progression') {
-    // 簡單處理：將拖曳的元素移到最後面
-    const oldIdx = item;
-    const chordObj = customProgressionArray.value.splice(oldIdx, 1)[0];
-    customProgressionArray.value.push(chordObj);
-  }
-  draggedItem.value = null;
-  syncEngineParams();
-};
-
-const handleContainerDragOver = (e) => {
-  e.preventDefault();
-  if (!draggedItem.value) return;
-
-  const container = e.currentTarget;
-  // 找出所有的拖曳卡片 (排除過渡中或非目標元素)
-  const cards = Array.from(container.children).filter(c => c.hasAttribute('draggable') && !c.classList.contains('list-leave-active'));
-  
-  if (cards.length === 0) {
-    activeGap.value = 0;
-    return;
-  }
-
+// 依指針位置計算插入縫隙索引
+const updateActiveGap = (clientX) => {
+  const container = progContainerRef.value;
+  if (!container) { activeGap.value = null; return; }
+  const cards = Array.from(container.querySelectorAll('[data-prog-card]'))
+    .filter(c => !c.classList.contains('list-leave-active'));
+  if (cards.length === 0) { activeGap.value = 0; return; }
   let targetIndex = cards.length;
   for (let i = 0; i < cards.length; i++) {
     const rect = cards[i].getBoundingClientRect();
     const cardCenter = rect.left + rect.width / 2;
-    if (e.clientX < cardCenter) {
-      targetIndex = i;
-      break;
-    }
+    if (clientX < cardCenter) { targetIndex = i; break; }
   }
   activeGap.value = targetIndex;
 };
 
-const handleContainerDragLeave = (e) => {
-  // 如果滑鼠離開 container，可以清除提示，但此處為求穩定可保留最後判斷的 gap
+const onDragPointerMove = (e) => {
+  const st = dragState.value;
+  if (!st || e.pointerId !== st.pointerId) return;
+  st.x = e.clientX;
+  st.y = e.clientY;
+  if (!st.dragging) {
+    if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < DRAG_THRESHOLD) return;
+    st.dragging = true;
+  }
+  e.preventDefault();
+  updateActiveGap(e.clientX);
 };
 
-const handleContainerDrop = (e) => {
-  if (!draggedItem.value) return;
-  isDroppedValid = true;
-  const { item, source } = draggedItem.value;
-  const targetIndex = activeGap.value !== null ? activeGap.value : customProgressionArray.value.length;
-  
-  if (source === 'library') {
-    customProgressionArray.value.splice(targetIndex, 0, { id: generateId(), value: item });
-  } else if (source === 'progression') {
-    const oldIdx = item;
-    if (oldIdx !== targetIndex && oldIdx + 1 !== targetIndex) {
+const onDragPointerUp = () => {
+  const st = dragState.value;
+  window.removeEventListener('pointermove', onDragPointerMove);
+  window.removeEventListener('pointerup', onDragPointerUp);
+  window.removeEventListener('pointercancel', onDragPointerUp);
+  if (!st) return;
+
+  if (st.dragging) {
+    const targetIndex = activeGap.value !== null ? activeGap.value : customProgressionArray.value.length;
+    if (st.source === 'library') {
+      customProgressionArray.value.splice(targetIndex, 0, { id: generateId(), value: st.item });
+      dragState.value = null;
+      activeGap.value = null;
+      syncEngineParams();
+      return;
+    } else if (st.source === 'progression') {
+      const oldIdx = st.item;
+      const needMove = oldIdx !== targetIndex && oldIdx + 1 !== targetIndex;
+      const adjusted = targetIndex > oldIdx ? targetIndex - 1 : targetIndex;
+      dragState.value = null;
+      activeGap.value = null;
+      // 不論順序有無改變，都把被拖曳的字卡「換上全新的 id」後重新插入。
+      // 拖曳期間該字卡為 display:none 而失去版面座標，若直接還原，
+      // TransitionGroup 會誤判其移動前座標為 (0,0) 而觸發從左上角飛入的 FLIP。
+      // 換新 id → Vue 視為全新進場 (enter)，套用 .list-enter 原地淡入縮放動畫，
+      // 徹底避開破圖；其餘被擠開的字卡仍保有座標，照常以 .list-move 平滑滑動。
+      const finalIdx = needMove ? adjusted : oldIdx;
       const chordObj = customProgressionArray.value[oldIdx];
       customProgressionArray.value.splice(oldIdx, 1);
-      const adjustedTargetIndex = targetIndex > oldIdx ? targetIndex - 1 : targetIndex;
-      customProgressionArray.value.splice(adjustedTargetIndex, 0, chordObj);
+      customProgressionArray.value.splice(finalIdx, 0, { id: generateId(), value: chordObj.value });
+      syncEngineParams();
+      return;
+    }
+  } else {
+    // 未超過拖曳門檻 → 視為點擊：library 新增 / progression 移除
+    if (st.source === 'library') {
+      addChord(st.item);
+    } else if (st.source === 'progression') {
+      removeChord(st.item);
     }
   }
-  draggedItem.value = null;
+
+  dragState.value = null;
   activeGap.value = null;
-  syncEngineParams();
 };
 
-const handleDragEnd = () => {
-  draggedItem.value = null;
-  activeGap.value = null;
+const startDrag = (e, item, source) => {
+  // 滑鼠僅響應左鍵；觸控/筆皆可
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  dragState.value = {
+    item,
+    source,
+    label: source === 'library' ? item : customProgressionArray.value[item].value,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    x: e.clientX,
+    y: e.clientY,
+    dragging: false
+  };
+  window.addEventListener('pointermove', onDragPointerMove, { passive: false });
+  window.addEventListener('pointerup', onDragPointerUp);
+  window.addEventListener('pointercancel', onDragPointerUp);
 };
 
 const addChord = (chordValue) => {
@@ -155,6 +206,28 @@ const minFret = computed(() => currentDynamicForm.value ? currentDynamicForm.val
 const maxFret = computed(() => currentDynamicForm.value ? currentDynamicForm.value.max : 4);
 const currentFormName = computed(() => currentDynamicForm.value ? currentDynamicForm.value.name : 'C');
 
+// ✨ 下一個和弦黑/紅閃爍的週期與 BPM 同步：一拍一次完整的黑紅循環
+const flashStyle = computed(() => ({
+  animationDuration: (60 / bpm.value) + 's'
+}));
+
+// 🎵 訓練頁面顯示用的當前和弦進行清單 (供高亮目前和弦)
+const activeProgressionList = computed(() => getActiveProgression());
+
+// 🎯 指板視覺專用的把位：預告期 (predict) 時提前切換到「下一個目標和弦」的 CAGED 把位，
+//          讓音階虛線半透明長方形提前導航使用者下一個要找音的區間。
+const displayDynamicForm = computed(() => {
+  if (isPlaying.value && currentPhase.value === 'predict') {
+    const progArray = getActiveProgression();
+    const nextIdx = (currentChordIdx.value + 1) % progArray.length;
+    // 若下一個和弦回到進行的第 0 項 (整輪結束)，把位會推進一個 cycle。
+    const nextCycle = cagedCycle.value + (nextIdx === 0 ? 1 : 0);
+    const form = getDynamicCagedForm(nextChord.value, keyRoot.value, nextCycle);
+    if (form) return form;
+  }
+  return currentDynamicForm.value;
+});
+
 // 🔄 同步前端面板參數至音訊引擎
 const syncEngineParams = () => {
   if (!trainerAudio) return;
@@ -164,10 +237,15 @@ const syncEngineParams = () => {
   
   // 生成當前自動爬音序列
   const activeChord = isPlaying.value ? currentChord.value : progArray[0];
+  // 把位必須與 activeChord 相符；未播放時 currentDynamicForm 仍是舊和弦 (如初始 vi)，
+  // 不能直接拿來算，否則會產生「和弦對不上把位」的錯誤爬音 (第一次開始播 vi 的 bug)。
+  const activeForm = isPlaying.value
+    ? currentDynamicForm.value
+    : getDynamicCagedForm(activeChord, keyRoot.value, cagedCycle.value);
   const cagedSeq = generateCagedSequence(
     keyRoot.value, 
     activeChord, 
-    currentDynamicForm.value, 
+    activeForm, 
     selectedStage.value,
     false
   );
@@ -198,6 +276,18 @@ const handleTogglePlay = () => {
     isTrainingActive.value = true;
   }
 
+  // 由停止狀態重新開始時，先把和弦顯示與把位狀態歸位到進行的第 0 項，
+  // 確保第一拍顯示與聲音都對應正確的起始和弦 (避免殘留初始 vi)。
+  if (!isPlaying.value) {
+    cagedCycle.value = 0;
+    const progArray = getActiveProgression();
+    currentChord.value = progArray[0];
+    nextChord.value = progArray.length > 1 ? progArray[1] : progArray[0];
+    currentChordIdx.value = 0;
+    currentPhase.value = 'prep';
+    localBeat4.value = 0;
+  }
+
   syncEngineParams();
   const playingState = trainerAudio.toggle();
   isPlaying.value = playingState;
@@ -209,6 +299,7 @@ const handleTogglePlay = () => {
       localBeat4.value = tickData.localBeat4;
       currentChord.value = tickData.currentChord;
       nextChord.value = tickData.nextChord;
+      currentChordIdx.value = tickData.currentChordIdx;
       activeNoteTarget.value = tickData.activeNoteTarget;
 
       // 當和弦輪轉時，重新計算下一輪的預設爬音序列
@@ -256,19 +347,37 @@ const exitTraining = () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-black text-white p-4 font-sans selection:bg-emerald-500 selection:text-black">
+  <div class="min-h-[100dvh] bg-black text-white p-4 font-sans selection:bg-emerald-500 selection:text-black">
+
+    <!-- 拖曳中跟隨指針的浮動字卡 (滑鼠 + 觸控通用) -->
+    <div 
+      v-if="dragState && dragState.dragging"
+      class="drag-ghost"
+      :style="{ left: dragState.x + 'px', top: dragState.y + 'px' }"
+    >
+      {{ dragState.label }}
+    </div>
     
     <div v-if="!isTrainingActive" class="max-w-3xl mx-auto space-y-6 pt-4 pb-12">
       
       <div class="flex justify-between items-center border-b border-zinc-800 pb-4">
         <h1 class="text-2xl font-black text-emerald-400 tracking-wider">⚡ CAGED 有氧吉他特訓核心</h1>
-        <button 
-          @click="isLeftHanded = !isLeftHanded"
-          class="px-4 py-2 text-xs font-bold rounded-lg border transition-all"
-          :class="isLeftHanded ? 'bg-amber-500 border-amber-400 text-black' : 'bg-zinc-900 border-zinc-700 text-zinc-400'"
-        >
-          {{ isLeftHanded ? '左手模式 (琴頭向右)' : '右手模式 (琴頭向左)' }}
-        </button>
+        <div class="flex gap-2">
+          <button 
+            @click="toggleFullscreen"
+            class="px-4 py-2 text-xs font-bold rounded-lg border transition-all bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+            :title="isFullscreen ? '退出全螢幕' : '全螢幕顯示'"
+          >
+            {{ isFullscreen ? '🗗 退出全螢幕' : '⛶ 全螢幕' }}
+          </button>
+          <button 
+            @click="isLeftHanded = !isLeftHanded"
+            class="px-4 py-2 text-xs font-bold rounded-lg border transition-all"
+            :class="isLeftHanded ? 'bg-amber-500 border-amber-400 text-black' : 'bg-zinc-900 border-zinc-700 text-zinc-400'"
+          >
+            {{ isLeftHanded ? '左手模式 (琴頭向右)' : '右手模式 (琴頭向左)' }}
+          </button>
+        </div>
       </div>
 
       <div class="bg-zinc-900/40 p-5 rounded-2xl border border-zinc-800 space-y-3">
@@ -306,51 +415,47 @@ const exitTraining = () => {
         </div>
         <div v-else class="space-y-3">
           <!-- 已選和弦 (Drop Zone) -->
-          <transition-group 
-            name="list"
-            tag="div"
-            class="flex flex-wrap gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-xl min-h-[5rem] items-center relative transition-all"
-            @dragover="handleContainerDragOver"
-            @dragleave="handleContainerDragLeave"
-            @drop="handleContainerDrop"
-          >
-            <div v-if="customProgressionArray.length === 0" key="empty-msg" class="text-zinc-500 text-sm w-full text-center absolute left-0 pointer-events-none">請拖曳下方和弦加入</div>
-            <div 
-              v-for="(chordObj, index) in customProgressionArray" 
-              :key="chordObj.id"
-              draggable="true"
-              @dragstart="handleDragStart(index, 'progression')"
-              @dragend="handleDragEnd"
-              @click="removeChord(index)"
-              class="px-4 py-2 font-bold cursor-pointer transition-all shadow-sm relative flex items-center justify-center rounded-lg border"
-              :class="[
-                activeGap === index ? 'ml-6 before:content-[\'\'] before:absolute before:-left-5 before:top-1/2 before:-translate-y-1/2 before:h-8 before:w-1.5 before:bg-transparent before:rounded-full' : '',
-                'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50'
-              ]"
-              title="點擊移除，拖放到縫隙中插入"
+          <div ref="progContainerRef">
+            <transition-group 
+              name="list"
+              tag="div"
+              class="flex flex-wrap gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-xl min-h-[5rem] items-center relative transition-all"
             >
-              {{ chordObj.value }}
-            </div>
-            <!-- 最終縫隙的高光提示 -->
-            <div 
-              v-if="customProgressionArray.length > 0 && activeGap === customProgressionArray.length"
-              key="gap-final"
-              class="h-8 w-1.5 bg-transparent rounded-full ml-2 transition-all"
-            ></div>
-          </transition-group>
+              <div v-if="customProgressionArray.length === 0" key="empty-msg" class="text-zinc-500 text-sm w-full text-center absolute left-0 pointer-events-none">請拖曳下方和弦加入</div>
+              <div 
+                v-for="(chordObj, index) in customProgressionArray" 
+                :key="chordObj.id"
+                data-prog-card
+                @pointerdown="startDrag($event, index, 'progression')"
+                class="px-4 py-2 font-bold cursor-grab active:cursor-grabbing transition-all shadow-sm relative flex items-center justify-center rounded-lg border touch-none select-none bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
+                :class="[
+                  activeGap === index ? 'ml-6 before:content-[\'\'] before:absolute before:-left-5 before:top-1/2 before:-translate-y-1/2 before:h-8 before:w-1.5 before:bg-emerald-400 before:rounded-full' : '',
+                  index === customProgressionArray.length - 1 && activeGap === customProgressionArray.length ? 'mr-6 after:content-[\'\'] after:absolute after:-right-5 after:top-1/2 after:-translate-y-1/2 after:h-8 after:w-1.5 after:bg-emerald-400 after:rounded-full' : '',
+                  dragState && dragState.source === 'progression' && dragState.item === index && dragState.dragging ? 'prog-card-hidden' : '',
+                  dragState && dragState.dragging ? '' : 'hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50'
+                ]"
+                title="點擊移除，拖放到縫隙中插入"
+              >
+                {{ chordObj.value }}
+              </div>
+            </transition-group>
+          </div>
           
-          <!-- 可用和弦庫 -->
-          <div class="flex flex-wrap gap-2">
-            <div
-              v-for="chord in availableChords"
-              :key="'lib-' + chord"
-              draggable="true"
-              @dragstart="handleDragStart(chord, 'library')"
-              @click="addChord(chord)"
-              class="px-4 py-2 bg-zinc-900 text-zinc-300 border border-zinc-700 rounded-lg font-bold cursor-pointer hover:bg-zinc-700 hover:text-white transition-colors"
-              title="點擊或拖曳加入進行"
-            >
-              {{ chord }}
+          <!-- 可用和弦庫 (依性質分類) -->
+          <div class="space-y-3">
+            <div v-for="group in chordLibrary" :key="group.label" class="space-y-1.5">
+              <div class="text-[0.7rem] font-bold text-zinc-500 tracking-wide uppercase">{{ group.label }}</div>
+              <div class="flex flex-wrap gap-2">
+                <div
+                  v-for="chord in group.chords"
+                  :key="'lib-' + chord"
+                  @pointerdown="startDrag($event, chord, 'library')"
+                  class="px-4 py-2 bg-zinc-900 text-zinc-300 border border-zinc-700 rounded-lg font-bold cursor-grab active:cursor-grabbing hover:bg-zinc-700 hover:text-white transition-colors touch-none select-none"
+                  title="點擊或拖曳加入進行"
+                >
+                  {{ chord }}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -416,19 +521,15 @@ const exitTraining = () => {
       </button>
     </div>
 
-    <div v-else class="min-h-screen flex flex-col justify-between max-w-5xl mx-auto py-4 space-y-4">
+    <div v-else class="min-h-[100dvh] flex flex-col justify-between max-w-5xl mx-auto py-4 space-y-4">
       
-      <div 
-        class="w-full text-center py-3 rounded-2xl border font-black text-lg tracking-widest transition-all duration-75"
-        :class="[
-          currentPhase === 'predict' 
-            ? 'bg-red-600/90 border-red-400 text-white animate-pulse shadow-[0_0_20px_rgba(220,38,38,0.6)]' 
-            : 'bg-zinc-900/50 border-zinc-800 text-zinc-400'
-        ]"
+      <button 
+        @click="toggleFullscreen"
+        class="absolute right-4 top-4 z-20 px-3 py-1.5 text-xs font-bold rounded-lg border bg-zinc-900/80 border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-all"
+        :title="isFullscreen ? '退出全螢幕' : '全螢幕顯示'"
       >
-        <span v-if="currentPhase === 'predict'">⚠️ NEXT CHORD 預告切換：{{ nextChord }} !!</span>
-        <span v-else>NEXT CHORD: {{ nextChord }}</span>
-      </div>
+        {{ isFullscreen ? '🗗' : '⛶' }}
+      </button>
 
       <div class="text-center py-6 flex flex-col items-center justify-center relative">
         <div class="flex gap-4 mb-4">
@@ -443,12 +544,43 @@ const exitTraining = () => {
           ></div>
         </div>
 
-        <h1 class="text-9xl font-black text-red-500 tracking-widest transition-transform duration-200" :class="{ 'scale-105': localBeat4 === 0 }">
-          {{ currentChord }}
-        </h1>
+        <!-- 所選和弦進行：高亮目前所在的和弦 -->
+        <div class="flex flex-wrap gap-2 justify-center mb-5">
+          <template v-for="(chord, idx) in activeProgressionList" :key="idx">
+            <span 
+              class="px-3 py-1.5 rounded-lg font-black text-base sm:text-lg border transition-all duration-150"
+              :class="idx === currentChordIdx 
+                ? 'bg-red-500/20 border-red-400 text-red-400 scale-110 shadow-[0_0_12px_rgba(239,68,68,0.5)]' 
+                : 'bg-zinc-900/60 border-zinc-800 text-zinc-500'"
+            >
+              {{ chord }}
+            </span>
+            <span v-if="idx < activeProgressionList.length - 1" class="text-zinc-700 font-black self-center">›</span>
+          </template>
+        </div>
+
+        <div class="relative w-full flex items-center justify-center">
+          <!-- 當前和弦永遠置中；非預告期時奇數拍縮小、其餘維持正常大小，預告期維持原尺寸 -->
+          <h1 
+            class="relative text-7xl sm:text-8xl md:text-9xl font-black text-red-500 tracking-widest transition-transform duration-200 ease-out" 
+            :class="currentPhase === 'predict' ? 'scale-100' : (localBeat4 % 2 === 1 ? 'scale-90' : 'scale-100')"
+          >
+            {{ currentChord }}
+            <!-- 預告期：箭頭 + 下一個和弦，緊鄰當前和弦右側 (當前和弦仍置中) -->
+            <span 
+              v-if="currentPhase === 'predict'"
+              class="absolute left-full top-0 ml-3 sm:ml-5 flex items-center gap-3 sm:gap-5 whitespace-nowrap"
+            >
+              <span class="text-5xl sm:text-7xl font-black text-zinc-500 leading-none">→</span>
+              <span class="font-black tracking-widest chord-flash" :style="flashStyle">
+                {{ nextChord }}
+              </span>
+            </span>
+          </h1>
+        </div>
         <p class="text-xl text-zinc-400 font-medium mt-1">
-          {{ NOTE_NAMES[(keyRoot + CHORD_MODES[currentChord]?.offset) % 12] }} {{ CHORD_MODES[currentChord]?.alias }} 和弦時間 
-          <span class="text-zinc-600 text-sm ml-2">({{ CHORD_MODES[currentChord]?.name }} Mode)</span>
+          {{ NOTE_NAMES[(keyRoot + CHORD_MODES[currentChord]?.offset) % 12] }} {{ CHORD_MODES[currentChord]?.label }} 和弦時間 
+          <span class="text-zinc-600 text-sm ml-2">({{ CHORD_MODES[currentChord]?.modeName }} Mode)</span>
         </p>
         
         <div class="absolute right-4 top-4 text-xs font-mono px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-emerald-400 uppercase tracking-widest">
@@ -460,7 +592,7 @@ const exitTraining = () => {
         <Fretboard 
           :keyRoot="keyRoot" 
           :currentChord="currentChord" 
-          :currentDynamicForm="currentDynamicForm" 
+          :currentDynamicForm="displayDynamicForm" 
           :isLeftHanded="isLeftHanded"
           :currentPhase="currentPhase"
           :activeNoteTarget="activeNoteTarget"
@@ -492,11 +624,32 @@ const exitTraining = () => {
 </template>
 
 <style scoped>
+/* 拖曳中跟隨指針的浮動字卡 */
+.drag-ghost {
+  position: fixed;
+  z-index: 9999;
+  transform: translate(-50%, -50%) scale(1.1);
+  pointer-events: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.25);
+  color: rgb(52, 211, 153);
+  border: 1px solid rgba(16, 185, 129, 0.6);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
 /* 拖拉字卡的動畫過場效果 */
 .list-move,
 .list-enter-active,
 .list-leave-active {
   transition: all 0.4s ease;
+}
+
+/* 拖曳重排時，原位置的來源字卡完全隱藏 (不再以半透明留下空殼) */
+.prog-card-hidden {
+  display: none !important;
 }
 
 .list-enter-from,
@@ -508,5 +661,22 @@ const exitTraining = () => {
 /* 確保移動時位置絕對，才能讓其他元素正確滑動填補空缺 */
 .list-leave-active {
   position: absolute;
+}
+
+/* 預告期下一個和弦：高頻率黑/紅雙色閃爍 */
+@keyframes chordFlash {
+  0%, 49% {
+    color: #ef4444;
+    text-shadow: 0 0 25px rgba(239, 68, 68, 0.9);
+  }
+  50%, 100% {
+    color: #0a0a0a;
+    text-shadow: none;
+  }
+}
+
+.chord-flash {
+  animation: chordFlash 0.22s steps(1, end) infinite;
+  will-change: color;
 }
 </style>

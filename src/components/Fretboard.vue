@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { calculateNote, NOTE_NAMES, CHORD_MODES, getAbsoluteNoteFromToken, getIntervalName, CAGED_STRING_BOUNDARIES, getRootFret } from '../utils/musicTheory.js';
 
 const props = defineProps({
@@ -95,13 +95,86 @@ const isCellInStrictBoundary = (cell) => {
   const [minOff, maxOff] = bounds[stringNum];
   return cell.fret >= rootFret + minOff && cell.fret <= rootFret + maxOff;
 };
+
+// 🪧 計算當前 CAGED 把位的「最大寬度長方形」音階區間 (取所有弦的最小~最大琴格)
+//    刻意不沿著各弦的鋸齒邊界畫凸凹形狀，而是用一個齊整的長方形框住整個把位。
+const scaleRegionBox = computed(() => {
+  if (!props.currentDynamicForm) return null;
+  const formName = props.currentDynamicForm.name;
+  const bounds = CAGED_STRING_BOUNDARIES[formName]?.bounds;
+  if (!bounds) return null;
+  const rootFret = getRootFret(props.currentDynamicForm);
+  let minFret = Infinity;
+  let maxFret = -Infinity;
+  for (let s = 1; s <= 6; s++) {
+    const [minOff, maxOff] = bounds[s];
+    minFret = Math.min(minFret, rootFret + minOff);
+    maxFret = Math.max(maxFret, rootFret + maxOff);
+  }
+  minFret = Math.max(0, minFret);
+  maxFret = Math.min(totalFrets, maxFret);
+  if (minFret > maxFret) return null;
+  return { minFret, maxFret };
+});
+
+// 🪧 為長方形區間內的琴格產生「虛線 + 半透明」標示用的 class
+//    只在長方形四個外邊畫出虛線，圍出齊整的矩形把位。
+const scaleRegionClasses = (cell) => {
+  const box = scaleRegionBox.value;
+  if (!box) return null;
+  if (cell.fret < box.minFret || cell.fret > box.maxFret) return null;
+  const topOut = cell.stringIndex === 0; // 1弦 (最上方)
+  const bottomOut = cell.stringIndex === 5; // 6弦 (最下方)
+  const lowerFretOut = cell.fret === box.minFret; // 琴頭(nut)側
+  const higherFretOut = cell.fret === box.maxFret; // 琴橋側
+  // 左手模式時琴頸方向左右相反，需對調左右邊界
+  const leftOut = props.isLeftHanded ? higherFretOut : lowerFretOut;
+  const rightOut = props.isLeftHanded ? lowerFretOut : higherFretOut;
+  return {
+    'fretboard-cell--scale-region': true,
+    'region-edge-top': topOut,
+    'region-edge-bottom': bottomOut,
+    'region-edge-left': leftOut,
+    'region-edge-right': rightOut
+  };
+};
+
+// 📐 依容器寬度自動縮放指板，避免在小螢幕被裁切 / 需橫向捲動
+const scrollEl = ref(null);
+const innerEl = ref(null);
+const fitScale = ref(1);
+let resizeObserver = null;
+
+const updateFit = () => {
+  if (!scrollEl.value || !innerEl.value) return;
+  const available = scrollEl.value.clientWidth;
+  const natural = innerEl.value.offsetWidth || 1;
+  const scale = available < natural ? available / natural : 1;
+  fitScale.value = scale;
+  // 同步縮放後的高度，移除底部多餘空白
+  scrollEl.value.style.height = (innerEl.value.offsetHeight * scale) + 'px';
+};
+
+onMounted(() => {
+  updateFit();
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateFit);
+    if (scrollEl.value) resizeObserver.observe(scrollEl.value);
+  }
+  window.addEventListener('resize', updateFit);
+});
+
+onUnmounted(() => {
+  if (resizeObserver) resizeObserver.disconnect();
+  window.removeEventListener('resize', updateFit);
+});
 </script>
 
 <template>
   <div class="fretboard-container">
     
-    <div class="fretboard-scroll">
-      <div class="fretboard-inner">
+    <div class="fretboard-scroll" ref="scrollEl">
+      <div class="fretboard-inner" ref="innerEl" :style="{ transform: 'scale(' + fitScale + ')', transformOrigin: 'top left' }">
         
         <!-- 指板主體 -->
         <div class="fretboard-body">
@@ -141,19 +214,17 @@ const isCellInStrictBoundary = (cell) => {
               v-for="cell in stringRow" 
               :key="cell.fret" 
               class="fretboard-cell"
-              :class="{ 
-                'fretboard-cell--nut': cell.fret === 0
-              }"
+              :class="[{ 'fretboard-cell--nut': cell.fret === 0 }, scaleRegionClasses(cell)]"
             >
               <!-- 琴格分隔線 (fret wire) — 僅垂直線 -->
               <div v-if="cell.fret !== 0" class="fretboard-fret-wire"></div>
 
-              <!-- 音符顯示邏輯 -->
-              <div v-if="isActiveNote(cell) || cell.note.isKeyRoot || (cell.isThisNodeInMode && isCellInStrictBoundary(cell))">
+              <!-- 音符顯示邏輯：只常駐顯示 key 正方形，其餘音只在播放到時亮起 -->
+              <div v-if="isActiveNote(cell) || cell.note.isKeyRoot">
                 
                 <!-- ===== Train 階段：閃爍正在發聲的音 ===== -->
                 <div v-if="props.currentPhase === 'train'">
-                  <!-- 正在閃爍的 active note -->
+                  <!-- 正在閃爍的 active note (播放到對應音時才亮起) -->
                   <div 
                     v-if="isActiveNote(cell)"
                     class="fretboard-note fretboard-note--active flex items-center justify-center"
@@ -167,39 +238,19 @@ const isCellInStrictBoundary = (cell) => {
                       {{ getIntervalName(cell.intervalFromChord, props.currentChord) }}
                     </span>
                   </div>
-                  
-                  <!-- 和弦根音 (紅色保持，不閃爍) -->
-                  <div 
-                    v-else-if="cell.note.absoluteNote === chordRootAbsoluteNote && isCellInStrictBoundary(cell)"
-                    class="fretboard-note fretboard-note--chord-root"
-                    :class="cell.note.isKeyRoot ? 'fretboard-note--square' : 'fretboard-note--circle'"
-                  ></div>
 
-                  <!-- 其餘音階 (暗灰色) -->
+                  <!-- key 根音正方形 (常駐顯示) -->
                   <div 
                     v-else-if="cell.note.isKeyRoot"
                     class="fretboard-note fretboard-note--muted fretboard-note--square"
                   ></div>
-                  <div 
-                    v-else-if="cell.isThisNodeInMode && isCellInStrictBoundary(cell)"
-                    class="fretboard-note fretboard-note--muted fretboard-note--circle"
-                  ></div>
                 </div>
 
-                <!-- ===== Prep / Predict 階段：全部安靜灰色 ===== -->
+                <!-- ===== Prep / Predict 階段：僅常駐顯示 key 正方形 ===== -->
                 <div v-else>
                   <div 
-                    v-if="cell.note.absoluteNote === chordRootAbsoluteNote && isCellInStrictBoundary(cell)"
-                    class="fretboard-note fretboard-note--chord-root"
-                    :class="cell.note.isKeyRoot ? 'fretboard-note--square' : 'fretboard-note--circle'"
-                  ></div>
-                  <div 
-                    v-else-if="cell.note.isKeyRoot"
+                    v-if="cell.note.isKeyRoot"
                     class="fretboard-note fretboard-note--dim fretboard-note--square"
-                  ></div>
-                  <div 
-                    v-else-if="cell.isThisNodeInMode && isCellInStrictBoundary(cell)"
-                    class="fretboard-note fretboard-note--dim fretboard-note--circle"
                   ></div>
                 </div>
 
@@ -248,7 +299,7 @@ const isCellInStrictBoundary = (cell) => {
 
 .fretboard-scroll {
   width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
   padding-bottom: 0.5rem;
   user-select: none;
 }
@@ -325,6 +376,29 @@ const isCellInStrictBoundary = (cell) => {
 .fretboard-cell--in-range {
   background: transparent;
 }
+
+/* ============================================
+   音階把位區間標示 (虛線 + 半透明)
+   讓使用者一眼看出當前和弦行進該在哪個格區間找音階
+   ============================================ */
+.fretboard-cell--scale-region {
+  background: rgba(52, 211, 153, 0.07);
+}
+
+/* 只在區間外緣畫出虛線，內側格不畫，藉此圍出整個 CAGED 把位形狀 */
+.fretboard-cell--scale-region::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  border: 0 dashed rgba(52, 211, 153, 0.55);
+  z-index: 2;
+}
+
+.region-edge-top::after { border-top-width: 1.5px; }
+.region-edge-bottom::after { border-bottom-width: 1.5px; }
+.region-edge-left::after { border-left-width: 1.5px; }
+.region-edge-right::after { border-right-width: 1.5px; }
 
 /* ============================================
    琴格分隔線 (Fret Wire) — 只有垂直的金屬線
