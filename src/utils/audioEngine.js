@@ -1,5 +1,11 @@
 // src/utils/audioEngine.js
-import { CHORD_MODES, getAbsoluteNoteFromToken, getChordPitches } from './musicTheory.js';
+import {
+  CHORD_MODES,
+  getAbsoluteNoteFromToken,
+  getChordPitches,
+  getDynamicCagedForm,
+  resolveCagedChordVoicing
+} from './musicTheory.js';
 
 export class AudioEngine {
   constructor() {
@@ -13,6 +19,9 @@ export class AudioEngine {
     this.scheduleAheadTime = 0.1;
     this.timerId = null;
     this.currentChordBeat = 0;
+    // 訓練一開始的「導入預告期」剩餘拍數：
+    // 第一個和弦在 prep 播放前，先走 4 拍 predict (僅節拍器 + 閃爍，不刮弦)。
+    this.introBeatsRemaining = 0;
     
     // 訓練設定
     this.progression = ['I', 'IV', 'V'];
@@ -23,6 +32,8 @@ export class AudioEngine {
     this.isCustomMode = false;
     this.customTokens = [];
     this.cagedSequence = [];
+    this.prepChordVoicingNotes = [];
+    this.currentCagedCycle = 0;
     
     this.onBeatTrigger = null; 
   }
@@ -33,9 +44,21 @@ export class AudioEngine {
     }
   }
 
-  setBPM(newBPM) { this.bpm = Number(newBPM); }
+  setBPM(newBPM) {
+    this.bpm = Number(newBPM);
+  }
   
-  updateParams(prog, stage, allowOpen, isCustom, tokens, cagedSeq, keyRoot) {
+  updateParams(
+    prog,
+    stage,
+    allowOpen,
+    isCustom,
+    tokens,
+    cagedSeq,
+    keyRoot,
+    prepChordVoicingNotes = [],
+    cagedCycle = null
+  ) {
     this.progression = prog;
     this.stage = stage;
     this.allowOpen = allowOpen;
@@ -43,6 +66,12 @@ export class AudioEngine {
     this.customTokens = tokens;
     this.cagedSequence = cagedSeq;
     this.keyRoot = keyRoot;
+    this.prepChordVoicingNotes = prepChordVoicingNotes;
+
+    // 播放中由排程器自己推進 CAGED cycle，避免 lookahead 回呼造成第一拍和弦提示落後。
+    if (!this.isPlaying && Number.isFinite(cagedCycle)) {
+      this.currentCagedCycle = cagedCycle;
+    }
   }
 
   createPluckedSound(freq, time) {
@@ -88,8 +117,56 @@ export class AudioEngine {
   }
 
   scheduleNote(globalBeat, time) {
+    // 【導入預告期】整段訓練最初的第一個和弦，在進入 prep 前先走 4 拍 predict。
+    // 只有節拍器 (高音 Click) 與有氧人聲倒數，並讓第一個和弦本身在中央閃爍；和弦不在此播放。
+    if (this.introBeatsRemaining > 0) {
+      const introLocalBeat = 4 - this.introBeatsRemaining; // 0..3
+
+      // predict 風格的高音 Click
+      const osc = this.audioCtx.createOscillator();
+      const gainNode = this.audioCtx.createGain();
+      osc.connect(gainNode);
+      gainNode.connect(this.audioCtx.destination);
+      osc.frequency.value = 587.33;
+      gainNode.gain.setValueAtTime(0.08, time);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+      osc.start(time);
+      osc.stop(time + 0.06);
+
+      // 有氧人聲語音倒數
+      if (this.onBeatTrigger) {
+        const words = ['One', 'Two', 'Three', 'Four'];
+        setTimeout(() => {
+          this.speakCount(words[introLocalBeat]);
+        }, (time - this.audioCtx.currentTime) * 1000);
+
+        const snapChordIdx = this.currentChordIdx;
+        const snapCurrentChord = this.progression[snapChordIdx];
+        const snapNextChord = this.progression[(snapChordIdx + 1) % this.progression.length];
+
+        setTimeout(() => {
+          this.onBeatTrigger({
+            globalBeat,
+            chordBeat: -1,
+            localBeat4: introLocalBeat,
+            phase: 'predict',
+            isIntroPredict: true,
+            currentChordIdx: snapChordIdx,
+            currentChord: snapCurrentChord,
+            nextChord: snapNextChord,
+            activeNoteTarget: null,
+            isChordStart: false,
+            isRoundEnd: false
+          });
+        }, (time - this.audioCtx.currentTime) * 1000);
+      }
+
+      this.introBeatsRemaining--;
+      return;
+    }
+
     const trainLen = this.isCustomMode ? this.customTokens.length : this.cagedSequence.length;
-    const trainTotalBeats = Math.max(1, trainLen); // 確保至少有1拍，取消向4對齊的Padding機制
+    const trainTotalBeats = Math.max(1, trainLen); // 確保至少有 1 拍
     const chordTotalBeats = 4 + trainTotalBeats + 4; // Prep + Train + Predict
 
     let phase = 'prep'; 
@@ -122,35 +199,36 @@ export class AudioEngine {
       clickOsc.start(time);
       clickOsc.stop(time + 0.1);
 
-      // 第一拍時播放吉他和弦刷扣伴奏 (基於真實 CAGED 把位)
+      // 第一拍時播放吉他和弦刷弦伴奏：使用資料定義式 CAGED voicing
       if (localBeat4 === 0 && this.keyRoot !== undefined) {
         const chordStr = this.progression[this.currentChordIdx];
         const chordConfig = CHORD_MODES[chordStr];
-        
-        if (chordConfig && this.cagedSequence && this.cagedSequence.length > 0) {
-          const chordTones = chordConfig.mode;
-          const strumNotes = [];
-          
-          // 模擬真實吉他刷弦：從粗弦 (6弦, stringIndex=5) 刷到細弦 (1弦, stringIndex=0)
-          for (let s = 5; s >= 0; s--) {
-            const notesOnString = this.cagedSequence.filter(n => n.stringIndex === s && chordTones.includes(n.intervalFromChordRoot));
-            if (notesOnString.length > 0) {
-              // 取該弦上該把位最低的組成音
-              strumNotes.push(notesOnString[0]);
-            }
+
+        if (chordConfig) {
+          // 優先在音訊排程當下依目前和弦與 CAGED cycle 即時計算 voicing。
+          // 這可避免進行回到第 1 個和弦時，prep 第一拍仍播放上一輪把位的問題。
+          const liveForm = getDynamicCagedForm(chordStr, this.keyRoot, this.currentCagedCycle);
+          const liveVoicingNotes = resolveCagedChordVoicing(this.keyRoot, chordStr, liveForm);
+          const sourceVoicingNotes = liveVoicingNotes.length > 0
+            ? liveVoicingNotes
+            : this.prepChordVoicingNotes;
+
+          if (sourceVoicingNotes && sourceVoicingNotes.length > 0) {
+            // 模擬真實吉他刷弦：從粗弦刷到細弦
+            const strumNotes = [...sourceVoicingNotes].sort((a, b) => b.stringIndex - a.stringIndex);
+            
+            strumNotes.forEach((noteObj, idx) => {
+              const baseOffsets = [24, 19, 15, 10, 5, 0];
+              const freq = 110 * Math.pow(2, (noteObj.fret + baseOffsets[noteObj.stringIndex]) / 12);
+              this.createPluckedSound(freq, time + idx * 0.025);
+            });
+          } else {
+            // 防呆 fallback
+            const pitches = getChordPitches(this.keyRoot, chordStr);
+            pitches.forEach((freq, idx) => {
+              this.createPluckedSound(freq, time + idx * 0.02);
+            });
           }
-          
-          strumNotes.forEach((noteObj, idx) => {
-            const baseOffsets = [24, 19, 15, 10, 5, 0];
-            const freq = 110 * Math.pow(2, (noteObj.fret + baseOffsets[noteObj.stringIndex]) / 12);
-            this.createPluckedSound(freq, time + idx * 0.025);
-          });
-        } else {
-          // 防呆 fallback
-          const pitches = getChordPitches(this.keyRoot, chordStr);
-          pitches.forEach((freq, idx) => {
-            this.createPluckedSound(freq, time + idx * 0.02);
-          });
         }
       }
     } else if (phase === 'train') {
@@ -160,7 +238,9 @@ export class AudioEngine {
         if (this.customTokens.length > 0) {
           const token = this.customTokens[trainIndex % this.customTokens.length];
           const chordStr = this.progression[this.currentChordIdx];
-          const absNote = getAbsoluteNoteFromToken(token, this.keyRoot, chordStr);
+
+          // 修正：原本參數順序反了。正確順序是 keyRoot, chordDegreeStr, token。
+          const absNote = getAbsoluteNoteFromToken(this.keyRoot, chordStr, token);
           
           const freq = 130.81 * Math.pow(2, (absNote - 0) / 12); 
           this.createPluckedSound(freq, time);
@@ -169,18 +249,23 @@ export class AudioEngine {
       } else {
         if (trainIndex < this.cagedSequence.length) {
           const noteObj = this.cagedSequence[trainIndex];
-          // 粗略估算吉他各弦的基頻 (Standard Tuning)
-          // 6弦(E2)=82.4, 5弦(A2)=110, 4弦(D3)=146.8, 3弦(G3)=196, 2弦(B3)=246.9, 1弦(E4)=329.6
-          // 這裡以 5弦空弦 A2=110Hz 為基準推算
-          const baseOffsets = [24, 19, 15, 10, 5, 0]; // 1~6弦距離 A2 的半音差
+
+          // 以 5 弦空弦 A2=110Hz 為基準推算各弦音高
+          const baseOffsets = [24, 19, 15, 10, 5, 0];
           const freq = 110 * Math.pow(2, (noteObj.fret + baseOffsets[noteObj.stringIndex]) / 12);
           
           this.createPluckedSound(freq, time);
-          activeNoteTarget = { type: 'default', stringIndex: noteObj.stringIndex, fret: noteObj.fret, absoluteNote: noteObj.absoluteNote, interval: noteObj.intervalFromChordRoot };
+          activeNoteTarget = {
+            type: 'default',
+            stringIndex: noteObj.stringIndex,
+            fret: noteObj.fret,
+            absoluteNote: noteObj.absoluteNote,
+            interval: noteObj.intervalFromChordRoot,
+            intervalLabel: noteObj.intervalLabel || noteObj.interval
+          };
         }
       }
-    } 
-    else if (phase === 'predict') {
+    } else if (phase === 'predict') {
       // 【預告期】高音 Click 輔助
       const osc = this.audioCtx.createOscillator();
       const gainNode = this.audioCtx.createGain();
@@ -207,9 +292,7 @@ export class AudioEngine {
       const isChordStart = currentBeat === 0;
       const isRoundEnd = currentBeat === chordTotalBeats - 1;
 
-      // 【重要】先在排程當下把和弦索引「凍結」成區域常數。
-      // 因為 lookahead 排程器會同步往前推進 this.currentChordIdx，
-      // 若在 setTimeout 回呼內才讀 this.currentChordIdx，最後一拍會誤顯示「下下個和弦」。
+      // 先在排程當下把和弦索引凍結成區域常數。
       const snapChordIdx = this.currentChordIdx;
       const snapCurrentChord = this.progression[snapChordIdx];
       const snapNextChord = this.progression[(snapChordIdx + 1) % this.progression.length];
@@ -235,6 +318,11 @@ export class AudioEngine {
     if (this.currentChordBeat >= chordTotalBeats) {
       this.currentChordBeat = 0;
       this.currentChordIdx = (this.currentChordIdx + 1) % this.progression.length;
+
+      // 一輪進行回到第 1 個和弦時，音訊引擎也同步推進 CAGED cycle。
+      if (this.currentChordIdx === 0) {
+        this.currentCagedCycle++;
+      }
     }
   }
 
@@ -250,6 +338,7 @@ export class AudioEngine {
 
   toggle() {
     this.init();
+
     if (this.isPlaying) {
       this.isPlaying = false;
       clearTimeout(this.timerId);
@@ -259,9 +348,12 @@ export class AudioEngine {
       this.currentGlobalBeat = 0;
       this.currentChordBeat = 0;
       this.currentChordIdx = 0;
+      this.currentCagedCycle = 0;
+      this.introBeatsRemaining = 4;
       this.nextNoteTime = this.audioCtx.currentTime + 0.05;
       this.scheduler();
     }
+
     return this.isPlaying;
   }
 }

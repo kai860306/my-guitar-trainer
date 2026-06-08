@@ -1,14 +1,26 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { calculateNote, NOTE_NAMES, CHORD_MODES, getAbsoluteNoteFromToken, getIntervalName, CAGED_STRING_BOUNDARIES, getRootFret } from '../utils/musicTheory.js';
+import {
+  calculateNote,
+  NOTE_NAMES,
+  CHORD_MODES,
+  getAbsoluteNoteFromToken,
+  getIntervalName
+} from '../utils/musicTheory.js';
+
+import {
+  getCagedScaleBounds
+} from '../utils/cagedScales.js';
 
 const props = defineProps({
   keyRoot: Number,
   currentChord: String,
   currentDynamicForm: Object,
+  scaleRegionOverride: { type: Object, default: null },
   isLeftHanded: Boolean,
   currentPhase: String,
   activeNoteTarget: Object,
+  prepChordVoicingNotes: { type: Array, default: () => [] },
   allowOpenStrings: Boolean
 });
 
@@ -67,11 +79,37 @@ const fretboardGrid = computed(() => {
 });
 
 // 🎨 訓練期閃爍用音程色彩
-const getIntervalColorClass = (interval) => {
-  if (interval === 0) return 'fretboard-note--root-active'; // 根音霓虹紅
-  if ([3, 4, 7].includes(interval)) return 'fretboard-note--chord-tone'; // 三五度寶石藍
-  if ([10, 11].includes(interval)) return 'fretboard-note--seventh'; // 七度神秘紫
-  return 'fretboard-note--scale-tone'; // 其餘音階亮綠
+const getIntervalColorClass = (interval, intervalLabel = null) => {
+  const label = intervalLabel || '';
+
+  if (interval === 0 || label === '1') {
+    return 'fretboard-note--root-active';
+  }
+
+  if (['b3', '3', '5', 'b5'].includes(label) || [3, 4, 6, 7].includes(interval)) {
+    return 'fretboard-note--chord-tone';
+  }
+
+  if (['b7', '7'].includes(label) || [10, 11].includes(interval)) {
+    return 'fretboard-note--seventh';
+  }
+
+  return 'fretboard-note--scale-tone';
+};
+
+const formatIntervalLabel = (label) => {
+  if (!label) return '';
+  return String(label)
+    .replace(/b/g, '♭')
+    .replace(/#/g, '♯');
+};
+
+const getDisplayIntervalLabel = (cell) => {
+  if (isActiveNote(cell) && props.activeNoteTarget?.intervalLabel) {
+    return formatIntervalLabel(props.activeNoteTarget.intervalLabel);
+  }
+
+  return getIntervalName(cell.intervalFromChord, props.currentChord);
 };
 
 // 判斷某個音是否為當前正在閃爍的 active note
@@ -86,35 +124,38 @@ const isActiveNote = (cell) => {
   return false;
 };
 
-const isCellInStrictBoundary = (cell) => {
-  if (!props.currentDynamicForm) return false;
-  const formName = props.currentDynamicForm.name;
-  const rootFret = getRootFret(props.currentDynamicForm);
-  const bounds = CAGED_STRING_BOUNDARIES[formName].bounds;
-  const stringNum = cell.stringIndex + 1;
-  const [minOff, maxOff] = bounds[stringNum];
-  return cell.fret >= rootFret + minOff && cell.fret <= rootFret + maxOff;
+// Prep 階段暫時顯示的灰色 CAGED 和弦フォーム音符
+const getPrepGhostNote = (cell) => {
+  if (props.currentPhase !== 'prep') return null;
+  return props.prepChordVoicingNotes.find(note =>
+    note.stringIndex === cell.stringIndex && note.fret === cell.fret
+  ) || null;
 };
 
 // 🪧 計算當前 CAGED 把位的「最大寬度長方形」音階區間 (取所有弦的最小~最大琴格)
 //    刻意不沿著各弦的鋸齒邊界畫凸凹形狀，而是用一個齊整的長方形框住整個把位。
+const scaleBounds = computed(() => {
+  return getCagedScaleBounds(
+    props.currentChord,
+    props.currentDynamicForm,
+    totalFrets
+  );
+});
+
 const scaleRegionBox = computed(() => {
-  if (!props.currentDynamicForm) return null;
-  const formName = props.currentDynamicForm.name;
-  const bounds = CAGED_STRING_BOUNDARIES[formName]?.bounds;
-  if (!bounds) return null;
-  const rootFret = getRootFret(props.currentDynamicForm);
-  let minFret = Infinity;
-  let maxFret = -Infinity;
-  for (let s = 1; s <= 6; s++) {
-    const [minOff, maxOff] = bounds[s];
-    minFret = Math.min(minFret, rootFret + minOff);
-    maxFret = Math.max(maxFret, rootFret + maxOff);
+  // 優先使用上層傳入的「整組和弦進行」統一把位邊界 (所有和弦的 min～max)。
+  if (props.scaleRegionOverride) {
+    return {
+      minFret: props.scaleRegionOverride.minFret,
+      maxFret: props.scaleRegionOverride.maxFret
+    };
   }
-  minFret = Math.max(0, minFret);
-  maxFret = Math.min(totalFrets, maxFret);
-  if (minFret > maxFret) return null;
-  return { minFret, maxFret };
+  if (!scaleBounds.value) return null;
+
+  return {
+    minFret: scaleBounds.value.minFret,
+    maxFret: scaleBounds.value.maxFret
+  };
 });
 
 // 🪧 為長方形區間內的琴格產生「虛線 + 半透明」標示用的 class
@@ -220,7 +261,7 @@ onUnmounted(() => {
               <div v-if="cell.fret !== 0" class="fretboard-fret-wire"></div>
 
               <!-- 音符顯示邏輯：只常駐顯示 key 正方形，其餘音只在播放到時亮起 -->
-              <div v-if="isActiveNote(cell) || cell.note.isKeyRoot">
+              <div v-if="isActiveNote(cell) || cell.note.isKeyRoot || getPrepGhostNote(cell)">
                 
                 <!-- ===== Train 階段：閃爍正在發聲的音 ===== -->
                 <div v-if="props.currentPhase === 'train'">
@@ -235,21 +276,31 @@ onUnmounted(() => {
                     ]"
                   >
                     <span class="text-[0.65rem] font-black leading-none tracking-tighter">
-                      {{ getIntervalName(cell.intervalFromChord, props.currentChord) }}
+                      {{ getDisplayIntervalLabel(cell) }}
                     </span>
                   </div>
 
                   <!-- key 根音正方形 (常駐顯示) -->
                   <div 
                     v-else-if="cell.note.isKeyRoot"
-                    class="fretboard-note fretboard-note--muted fretboard-note--square"
+                    class="fretboard-note fretboard-note--dim fretboard-note--square"
                   ></div>
                 </div>
 
-                <!-- ===== Prep / Predict 階段：僅常駐顯示 key 正方形 ===== -->
+                <!-- ===== Prep / Predict 階段：Prep 顯示灰色 CAGED 和弦フォーム，其餘只顯示 key 正方形 ===== -->
                 <div v-else>
                   <div 
-                    v-if="cell.note.isKeyRoot"
+                    v-if="getPrepGhostNote(cell)"
+                    class="fretboard-note fretboard-note--ghost-chord"
+                    :class="cell.note.isKeyRoot ? 'fretboard-note--square' : 'fretboard-note--circle'"
+                  >
+                    <span class="text-[0.65rem] font-black leading-none tracking-tighter">
+                      {{ formatIntervalLabel(getPrepGhostNote(cell).interval) || getIntervalName(getPrepGhostNote(cell).intervalFromChordRoot, props.currentChord) }}
+                    </span>
+                  </div>
+
+                  <div 
+                    v-else-if="cell.note.isKeyRoot"
                     class="fretboard-note fretboard-note--dim fretboard-note--square"
                   ></div>
                 </div>
@@ -503,6 +554,14 @@ onUnmounted(() => {
 .fretboard-note--dim {
   background: rgb(39, 39, 42);
   border: 1px solid rgb(63, 63, 70);
+}
+
+/* Prep 階段的 CAGED 和弦形狀提示：灰色圓點 */
+.fretboard-note--ghost-chord {
+  background: rgba(161, 161, 170, 0.58);
+  border: 1px solid rgba(212, 212, 216, 0.85);
+  color: rgb(24, 24, 27);
+  box-shadow: 0 0 10px rgba(161, 161, 170, 0.38);
 }
 
 /* ============================================

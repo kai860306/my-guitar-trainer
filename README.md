@@ -28,6 +28,7 @@
 * **統一資料模型：** 每張字卡以 `offset / mode / family / label / modeName` 統一描述，新增和弦僅需於 `CHORD_MODES` 增加一筆，指板、音訊與爬音三大引擎即自動支援。
 ### 🎵 律動時序三部曲與階梯解鎖 (3-Phase Rhythm & Progression)
 * **4/4 拍動態時序演算法：**
+  * **導入預告期 (Intro Predict)：** 整段訓練最開始，先走 4 拍純導入提示（節拍器 + 人聲倒數 + 第一個和弦置中閃爍），不刷扣、不顯示下一個和弦，作為起跑導引。
   * **準備期 (Prep)：** 觸發真實木吉他物理合成刷扣音，指板僅常駐顯示 Key 的灰色正方形定位點，強迫大腦用意念導航。
   * **訓練期 (Train)：** 逐拍播放單音。發音點以色彩美學閃爍並印上音程數字（如 $1, 3, 5, \flat3$）。
   * **預告期 (Predict)：** 單音停止，切換為有氧英語人聲播報（"One, Two, Three, Four"）。當前和弦右側出現「→ 下一個和弦」，以**與 BPM 同步的黑/紅高頻閃爍**預告，指板把位亦提前切到下一個和弦。
@@ -43,8 +44,9 @@
 
 * **框架 (Framework):** Vue 3 (Script Setup)
 * **構建工具 (Build Tool):** Vite
-* **樣式 (Styling):** Tailwind CSS (具備磨砂玻璃 Backdrop Blur 質感與霓虹發光特效)
-* **樂理核心 (Core Logic):** 自研高精度 `musicTheory.js` 絕對音高轉換矩陣
+* **樣式 (Styling):** Tailwind CSS v4（`@tailwindcss/vite` 外掛，具備磨砂玻璃 Backdrop Blur 質感與霓虹發光特效）
+* **樂理核心 (Core Logic):** 自研 `musicTheory.js` + `cagedScales.js`，涵蓋絕對音高轉換、CAGED 把位推算與 35 組音階 / 和弦 voicing 資料
+* **音訊引擎 (Audio Engine):** 原生 Web Audio API 硬體級時鐘排程（`audioEngine.js`），刷扣合成 + 單音爬音；預告期人聲倒數採用 Web Speech API (SpeechSynthesis)
 
 ---
 
@@ -106,17 +108,22 @@ npm run preview
 
 ```text
 my-guitar-trainer/
-├── .github/workflows/   # GitHub Actions 自動化部署腳本
+├── .github/workflows/      # GitHub Actions 自動化部署腳本
+├── public/                 # 靜態資源 (favicon 等)
 ├── src/
 │   ├── components/
-│   │   └── Fretboard.vue # 核心組件：二維指板矩陣、音程色彩渲染
+│   │   └── Fretboard.vue   # 核心組件：二維指板矩陣、音程色彩渲染、把位虛線框與自適應縮放
 │   ├── utils/
-│   │   └── musicTheory.js# 樂理邏輯：絕對音高、音程與和弦 offset 計算
-│   ├── App.vue          # 應用主入口：全域狀態與音訊引擎橋接
-│   └── main.js          # Vue 初始化
-├── index.html           # 網頁入口
-├── vite.config.js       # Vite 設定檔 (已封裝基底路徑修正)
-└── package.json         # 專案套件依賴說明
+│   │   ├── musicTheory.js  # 樂理核心：CHORD_MODES 資料模型、CAGED 把位推算、和弦 voicing、調式映射
+│   │   ├── cagedScales.js  # CAGED 音階資料與爬音序列產生器 (35 個 form、Stage 1-5 取音)
+│   │   └── audioEngine.js  # Web Audio 硬體時鐘排程：刷扣合成、單音爬音、人聲倒數與時序三部曲
+│   ├── App.vue             # 應用主入口：全域狀態、拖曳組裝器與音訊引擎橋接
+│   ├── style.css           # 全域樣式
+│   └── main.js             # Vue 初始化
+├── index.html              # 網頁入口
+├── spec.md                 # 產品需求規格書 (PRD)
+├── vite.config.js          # Vite 設定檔 (已封裝基底路徑修正)
+└── package.json            # 專案套件依賴說明
 
 ```
 

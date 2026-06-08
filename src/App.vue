@@ -1,7 +1,19 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import Fretboard from './components/Fretboard.vue';
-import { NOTE_NAMES, CHORD_MODES, PROGRESSION_PRESETS, generateCagedSequence, getDynamicCagedForm } from './utils/musicTheory.js';
+import {
+  NOTE_NAMES,
+  CHORD_MODES,
+  PROGRESSION_PRESETS,
+  getDynamicCagedForm,
+  resolveCagedChordVoicing
+} from './utils/musicTheory.js';
+
+import {
+  generateCagedScaleSequence,
+  validateCagedScales,
+  getCagedScaleBounds
+} from './utils/cagedScales.js';
 import { AudioEngine } from './utils/audioEngine.js';
 
 // 基礎設定狀態
@@ -39,6 +51,12 @@ const isPlaying = ref(false);
 
 // 來自音訊引擎的即時時序同步訊號
 const currentPhase = ref('prep'); // prep, train, predict
+// 訓練最開始的「導入預告期」：第一個和弦在 prep 播放前，先走 4 拍 predict，
+// 此期間僅節拍器 + 第一個和弦置中閃爍，不刮弦也不顯示「→ 下一個和弦」。
+const isIntroPredict = ref(false);
+// 是否仍未走過「第一個和弦的第一次 chordStart」：
+// 用來避免導入預告期推進的 globalBeat 讓第一輪被誤判為「已完成一輪」而推進把位。
+const isFirstChordStart = ref(true);
 const localBeat4 = ref(0);
 const currentChord = ref('vi');
 const nextChord = ref('IV');
@@ -49,6 +67,13 @@ let trainerAudio = null;
 
 onMounted(() => {
   trainerAudio = new AudioEngine();
+
+  // 開發時檢查 CAGED_SCALES 是否完整建立 35 個 forms。
+  const scaleErrors = validateCagedScales();
+  if (scaleErrors.length > 0) {
+    console.warn('CAGED_SCALES 資料檢查發現問題：', scaleErrors);
+  }
+
   document.addEventListener('fullscreenchange', syncFullscreenState);
   document.addEventListener('webkitfullscreenchange', syncFullscreenState);
 });
@@ -217,6 +242,10 @@ const activeProgressionList = computed(() => getActiveProgression());
 // 🎯 指板視覺專用的把位：預告期 (predict) 時提前切換到「下一個目標和弦」的 CAGED 把位，
 //          讓音階虛線半透明長方形提前導航使用者下一個要找音的區間。
 const displayDynamicForm = computed(() => {
+  // 導入預告期接的是第一個和弦本身的 prep，因此把位維持第一個和弦，不提前切到下一個。
+  if (isIntroPredict.value) {
+    return currentDynamicForm.value;
+  }
   if (isPlaying.value && currentPhase.value === 'predict') {
     const progArray = getActiveProgression();
     const nextIdx = (currentChordIdx.value + 1) % progArray.length;
@@ -226,6 +255,44 @@ const displayDynamicForm = computed(() => {
     if (form) return form;
   }
   return currentDynamicForm.value;
+});
+
+// 指板把位邊界：不再對「同一輪和弦進行」中的每個和弦各畫各的邊界，
+// 而是取整組和弦進行內所有和弦的最小～最大琴格，畫成同一個齊整的長方形把位。
+// 指板總格數需與 Fretboard 內的 totalFrets 一致。
+const FRETBOARD_TOTAL_FRETS = 15;
+
+const computeProgressionScaleRegion = (cycle) => {
+  const progArray = getActiveProgression();
+  let minFret = Infinity;
+  let maxFret = -Infinity;
+  for (const chord of progArray) {
+    const form = getDynamicCagedForm(chord, keyRoot.value, cycle);
+    const bounds = getCagedScaleBounds(chord, form, FRETBOARD_TOTAL_FRETS);
+    if (!bounds) continue;
+    minFret = Math.min(minFret, bounds.minFret);
+    maxFret = Math.max(maxFret, bounds.maxFret);
+  }
+  if (minFret === Infinity || maxFret === -Infinity) return null;
+  return { minFret, maxFret };
+};
+
+const displayScaleRegion = computed(() => {
+  // 預告期 (predict) 且下一個和弦回到進行第 0 項時，整輪結束、把位推進一個 cycle，
+  //   提前切換到下一輪進行的整組邊界 (與 displayDynamicForm 的推進邏輯一致)。
+  let cycle = cagedCycle.value;
+  if (!isIntroPredict.value && isPlaying.value && currentPhase.value === 'predict') {
+    const progArray = getActiveProgression();
+    const nextIdx = (currentChordIdx.value + 1) % progArray.length;
+    if (nextIdx === 0) cycle = cagedCycle.value + 1;
+  }
+  return computeProgressionScaleRegion(cycle);
+});
+
+// 🎸 Prep 階段顯示與播放用的資料定義式 CAGED 和弦フォーム
+const prepChordVoicingNotes = computed(() => {
+  if (!currentDynamicForm.value) return [];
+  return resolveCagedChordVoicing(keyRoot.value, currentChord.value, currentDynamicForm.value);
 });
 
 // 🔄 同步前端面板參數至音訊引擎
@@ -242,13 +309,15 @@ const syncEngineParams = () => {
   const activeForm = isPlaying.value
     ? currentDynamicForm.value
     : getDynamicCagedForm(activeChord, keyRoot.value, cagedCycle.value);
-  const cagedSeq = generateCagedSequence(
-    keyRoot.value, 
-    activeChord, 
-    activeForm, 
+  const cagedSeq = generateCagedScaleSequence(
+    keyRoot.value,
+    activeChord,
+    activeForm,
     selectedStage.value,
     false
   );
+
+  const prepVoicingNotes = resolveCagedChordVoicing(keyRoot.value, activeChord, activeForm);
   
   trainerAudio.setBPM(bpm.value);
   trainerAudio.updateParams(
@@ -258,7 +327,9 @@ const syncEngineParams = () => {
     isCustomSequenceMode.value,
     customTokens,
     cagedSeq,
-    keyRoot.value
+    keyRoot.value,
+    prepVoicingNotes,
+    cagedCycle.value
   );
 };
 
@@ -284,7 +355,11 @@ const handleTogglePlay = () => {
     currentChord.value = progArray[0];
     nextChord.value = progArray.length > 1 ? progArray[1] : progArray[0];
     currentChordIdx.value = 0;
-    currentPhase.value = 'prep';
+    // 開始的第一段是導入預告期 (predict)：立即進入 predict 狀態，
+    // 避免第一個 intro tick 到達前，指板因 prep 狀態瞬間畫出和弦音。
+    currentPhase.value = 'predict';
+    isIntroPredict.value = true;
+    isFirstChordStart.value = true;
     localBeat4.value = 0;
   }
 
@@ -296,6 +371,7 @@ const handleTogglePlay = () => {
     // 訂閱硬體時鐘回呼
     trainerAudio.onBeatTrigger = (tickData) => {
       currentPhase.value = tickData.phase;
+      isIntroPredict.value = !!tickData.isIntroPredict;
       localBeat4.value = tickData.localBeat4;
       currentChord.value = tickData.currentChord;
       nextChord.value = tickData.nextChord;
@@ -305,9 +381,14 @@ const handleTogglePlay = () => {
       // 當和弦輪轉時，重新計算下一輪的預設爬音序列
       if (tickData.isChordStart || tickData.isRoundEnd) {
         
-        // 【修正邏輯】當一個完整的進行輪迴結束，回到第 0 個和弦的第一拍時，才將把位推進
-        if (tickData.isChordStart && tickData.currentChordIdx === 0 && tickData.globalBeat > 0) {
-          cagedCycle.value++;
+        // 【修正邏輯】當一個完整的進行輪迴結束，回到第 0 個和弦的第一拍時，才將把位推進。
+        // 不能用 globalBeat，因為導入預告期會多推進 4 拍，會讓第一輪被誤判。
+        if (tickData.isChordStart && tickData.currentChordIdx === 0) {
+          if (isFirstChordStart.value) {
+            isFirstChordStart.value = false;
+          } else {
+            cagedCycle.value++;
+          }
         }
 
         syncEngineParams();
@@ -316,6 +397,7 @@ const handleTogglePlay = () => {
   } else {
     // 停止時歸位
     currentPhase.value = 'prep';
+    isIntroPredict.value = false;
     localBeat4.value = 0;
     activeNoteTarget.value = null;
   }
@@ -333,6 +415,8 @@ const exitTraining = () => {
   cagedCycle.value = 0;
   localBeat4.value = 0;
   currentPhase.value = 'prep';
+  isIntroPredict.value = false;
+  isFirstChordStart.value = true;
   
   const progArray = getActiveProgression();
   currentChord.value = progArray[0];
@@ -342,6 +426,7 @@ const exitTraining = () => {
     trainerAudio.currentChordIdx = 0;
     trainerAudio.currentGlobalBeat = 0;
     trainerAudio.currentChordBeat = 0;
+    trainerAudio.currentCagedCycle = 0;
   }
 };
 </script>
@@ -563,12 +648,17 @@ const exitTraining = () => {
           <!-- 當前和弦永遠置中；非預告期時奇數拍縮小、其餘維持正常大小，預告期維持原尺寸 -->
           <h1 
             class="relative text-7xl sm:text-8xl md:text-9xl font-black text-red-500 tracking-widest transition-transform duration-200 ease-out" 
-            :class="currentPhase === 'predict' ? 'scale-100' : (localBeat4 % 2 === 1 ? 'scale-90' : 'scale-100')"
+            :class="[
+              currentPhase === 'predict' ? 'scale-100' : (localBeat4 % 2 === 1 ? 'scale-90' : 'scale-100'),
+              isIntroPredict ? 'chord-flash' : ''
+            ]"
+            :style="isIntroPredict ? flashStyle : {}"
           >
             {{ currentChord }}
-            <!-- 預告期：箭頭 + 下一個和弦，緊鄰當前和弦右側 (當前和弦仍置中) -->
+            <!-- 預告期：箭頭 + 下一個和弦，緊鄰當前和弦右側 (當前和弦仍置中)。
+                 導入預告期 (isIntroPredict) 只讓第一個和弦置中閃爍，不顯示下一個和弦。 -->
             <span 
-              v-if="currentPhase === 'predict'"
+              v-if="currentPhase === 'predict' && !isIntroPredict"
               class="absolute left-full top-0 ml-3 sm:ml-5 flex items-center gap-3 sm:gap-5 whitespace-nowrap"
             >
               <span class="text-5xl sm:text-7xl font-black text-zinc-500 leading-none">→</span>
@@ -592,10 +682,12 @@ const exitTraining = () => {
         <Fretboard 
           :keyRoot="keyRoot" 
           :currentChord="currentChord" 
+          :scaleRegionOverride="displayScaleRegion"
           :currentDynamicForm="displayDynamicForm" 
           :isLeftHanded="isLeftHanded"
           :currentPhase="currentPhase"
           :activeNoteTarget="activeNoteTarget"
+          :prepChordVoicingNotes="prepChordVoicingNotes"
           :allowOpenStrings="false"
         />
       </div>
