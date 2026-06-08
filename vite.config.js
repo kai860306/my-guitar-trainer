@@ -8,5 +8,5 @@ export default defineConfig({
     vue(),
     tailwindcss(), // 2. 把外掛放進去
   ],
-  base: '/my-guitar-trainer/', // 3. 順便幫你把未來 GitHub Pages 部署的路徑預先設定好！
+  base: './', // 3. 順便幫你把未來 GitHub Pages 部署的路徑預先設定好！
 })
