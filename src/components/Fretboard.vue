@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue';
 import {
   calculateNote,
   NOTE_NAMES,
@@ -21,7 +21,6 @@ const props = defineProps({
   currentPhase: String,
   activeNoteTarget: Object,
   prepChordVoicingNotes: { type: Array, default: () => [] },
-  allowOpenStrings: Boolean
 });
 
 const totalFrets = 15;
@@ -30,6 +29,19 @@ const fretMarkers = [3, 5, 7, 9, 12, 15];
 
 // 🎸 每根弦的粗細 (1弦最細 → 6弦最粗)
 const stringThickness = [1, 1.5, 2, 2.5, 3, 3.5];
+
+// 📏 各品格寬度比例 (十二平均律)：第 n 品的寬度 ∝ 2^(-(n-1)/12)，
+//    亦即每往高把位每格寬度約乘以 0.943874，呈現真實吉他「第一格最寬、越高越窄」。
+//    空弦欄 (nut) 固定給一個較窄的比例。
+const NUT_FLEX = 0.62;
+const fretFlexGrow = (fret) => {
+  if (fret === 0) return NUT_FLEX;
+  return Math.pow(2, -(fret - 1) / 12);
+};
+const fretCellStyle = (fret) => ({
+  flexGrow: fretFlexGrow(fret),
+  flexBasis: 0
+});
 
 // 🧠 計算當前和弦的實體根音音高數值
 const chordRootAbsoluteNote = computed(() => {
@@ -180,42 +192,86 @@ const scaleRegionClasses = (cell) => {
   };
 };
 
-// 📐 依容器寬度自動縮放指板，避免在小螢幕被裁切 / 需橫向捲動
-const scrollEl = ref(null);
-const innerEl = ref(null);
-const fitScale = ref(1);
-let resizeObserver = null;
+// 📐 指板整體等比例縮放。
+//    重點：不要再把指板高度強制拉滿 placeholder，否則 iPhone 橫向時
+//    圓形、方形、琴格數字會因為高度被壓縮而變形或跑位。
+//    這裡改成：在可用區域內，以固定長寬比放入最大的指板。
+const fretboardScrollEl = ref(null);
+const fretboardFitStyle = ref({});
 
-const updateFit = () => {
-  if (!scrollEl.value || !innerEl.value) return;
-  const available = scrollEl.value.clientWidth;
-  const natural = innerEl.value.offsetWidth || 1;
-  const scale = available < natural ? available / natural : 1;
-  fitScale.value = scale;
-  // 同步縮放後的高度，移除底部多餘空白
-  scrollEl.value.style.height = (innerEl.value.offsetHeight * scale) + 'px';
+// 指板整體的目標長寬比。
+// 數字越大，指板越扁長；數字越小，指板越高。
+// iPhone 橫向若仍覺得太高，可試 4.5；若覺得太扁，可試 3.9。
+const FRETBOARD_ASPECT_RATIO = 4.25;
+
+let resizeObserver = null;
+let orientationTimer = null;
+
+const updateFretboardFit = () => {
+  const el = fretboardScrollEl.value;
+  if (!el) return;
+
+  const availableWidth = el.clientWidth;
+  const availableHeight = el.clientHeight;
+
+  if (!availableWidth || !availableHeight) return;
+
+  // 先假設吃滿寬度，再檢查高度是否放得下。
+  let width = availableWidth;
+  let height = width / FRETBOARD_ASPECT_RATIO;
+
+  // 如果高度超出，就改由高度反推寬度，維持長寬比。
+  if (height > availableHeight) {
+    height = availableHeight;
+    width = height * FRETBOARD_ASPECT_RATIO;
+  }
+
+  // 音符與數字尺寸跟著「縮放後的指板高度」走，
+  // 這樣圓形與方形會維持正確比例，不會被 row 高度壓扁。
+  const noteSize = Math.max(13, Math.min(32, height * 0.095));
+  const numberSize = Math.max(9, Math.min(14, height * 0.045));
+  const numberMargin = Math.max(2, Math.min(10, height * 0.025));
+
+  fretboardFitStyle.value = {
+    width: `${width}px`,
+    height: `${height}px`,
+    '--fretboard-note-size': `${noteSize}px`,
+    '--fretboard-number-size': `${numberSize}px`,
+    '--fretboard-number-margin': `${numberMargin}px`
+  };
+};
+
+const handleOrientationChange = () => {
+  // iOS Safari 橫直切換後，clientWidth / clientHeight 會晚一點穩定。
+  window.clearTimeout(orientationTimer);
+  orientationTimer = window.setTimeout(updateFretboardFit, 120);
 };
 
 onMounted(() => {
-  updateFit();
-  if (typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(updateFit);
-    if (scrollEl.value) resizeObserver.observe(scrollEl.value);
+  nextTick(updateFretboardFit);
+
+  if (typeof ResizeObserver !== 'undefined' && fretboardScrollEl.value) {
+    resizeObserver = new ResizeObserver(updateFretboardFit);
+    resizeObserver.observe(fretboardScrollEl.value);
   }
-  window.addEventListener('resize', updateFit);
+
+  window.addEventListener('resize', updateFretboardFit);
+  window.addEventListener('orientationchange', handleOrientationChange);
 });
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect();
-  window.removeEventListener('resize', updateFit);
+  window.clearTimeout(orientationTimer);
+  window.removeEventListener('resize', updateFretboardFit);
+  window.removeEventListener('orientationchange', handleOrientationChange);
 });
 </script>
 
 <template>
   <div class="fretboard-container">
     
-    <div class="fretboard-scroll" ref="scrollEl">
-      <div class="fretboard-inner" ref="innerEl" :style="{ transform: 'scale(' + fitScale + ')', transformOrigin: 'top left' }">
+    <div class="fretboard-scroll" ref="fretboardScrollEl">
+      <div class="fretboard-inner" :style="fretboardFitStyle">
         
         <!-- 指板主體 -->
         <div class="fretboard-body">
@@ -227,6 +283,7 @@ onUnmounted(() => {
               :key="'inlay-'+fret" 
               class="fretboard-inlay-column"
               :class="{ 'fretboard-inlay-column--nut': fret === 0 }"
+              :style="fretCellStyle(fret)"
             >
               <template v-if="fret !== 0 && fretMarkers.includes(fret)">
                 <template v-if="fret === 12">
@@ -255,10 +312,26 @@ onUnmounted(() => {
               v-for="cell in stringRow" 
               :key="cell.fret" 
               class="fretboard-cell"
-              :class="[{ 'fretboard-cell--nut': cell.fret === 0 }, scaleRegionClasses(cell)]"
+              :class="[
+                {
+                  'fretboard-cell--nut': cell.fret === 0,
+                  'fretboard-cell--left-handed': props.isLeftHanded
+                },
+                scaleRegionClasses(cell)
+              ]"
+              :style="fretCellStyle(cell.fret)"
             >
-              <!-- 琴格分隔線 (fret wire) — 僅垂直線 -->
-              <div v-if="cell.fret !== 0" class="fretboard-fret-wire"></div>
+              <!-- 低品格側邊界：右手模式畫左邊，左手模式畫右邊 -->
+              <div
+                v-if="cell.fret !== 0"
+                class="fretboard-fret-wire fretboard-fret-wire--low"
+              ></div>
+
+              <!-- 最高顯示 fret 的高品格側邊界：補出 15 / 16 外側線，16 本身仍不顯示 -->
+              <div
+                v-if="cell.fret === totalFrets"
+                class="fretboard-fret-wire fretboard-fret-wire--high"
+              ></div>
 
               <!-- 音符顯示邏輯：只常駐顯示 key 正方形，其餘音只在播放到時亮起 -->
               <div v-if="isActiveNote(cell) || cell.note.isKeyRoot || getPrepGhostNote(cell)">
@@ -320,6 +393,7 @@ onUnmounted(() => {
             :key="'num-'+fret" 
             class="fretboard-fret-number"
             :class="{ 'fretboard-fret-number--nut': fret === 0 }"
+            :style="fretCellStyle(fret)"
           >
             <span :class="{ 'fretboard-fret-number--marker': fretMarkers.includes(fret) }">
               {{ fret === 0 ? '空' : fret }}
@@ -338,32 +412,84 @@ onUnmounted(() => {
    ============================================ */
 .fretboard-container {
   width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   background: rgba(24, 24, 27, 0.6);
-  padding: 1.5rem;
+  padding: clamp(0.25rem, 1.2dvh, 1.5rem);
   border-radius: 1.5rem;
   border: 1px solid rgb(39, 39, 42);
   backdrop-filter: blur(16px);
+  overflow: hidden;
 }
 
 .fretboard-scroll {
   width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  padding-bottom: 0.5rem;
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 橫向且高度受限時，收斂指板容器留白並縮短弦距 / 音符，
+   讓自動縮放以「寬度」為準，使指板能延伸至整個可用寬度。 */
+@media (orientation: landscape) and (max-height: 600px) {
+  .fretboard-container {
+    padding: 0.3rem 0.2rem;
+    border-radius: 1rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .fretboard-container {
+    padding: 0.2rem 0.15rem;
+    border-radius: 0.85rem;
+  }
+
+  .fretboard-note--active {
+    transform: scale(1.06);
+  }
+
+  @keyframes noteBounce {
+    0% { transform: scale(0.86); opacity: 0.6; }
+    50% { transform: scale(1.12); }
+    100% { transform: scale(1.06); opacity: 1; }
+  }
 }
 
 .fretboard-inner {
-  min-width: 850px;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
+
+  /* JS 計算前的 fallback。實際尺寸會由 fretboardFitStyle 覆蓋。 */
+  width: 100%;
+  aspect-ratio: 4.25 / 1;
+
+  --fretboard-note-size: 18px;
+  --fretboard-number-size: 11px;
+  --fretboard-number-margin: 4px;
 }
 
 /* ============================================
    指板主體 (木板效果)
    ============================================ */
 .fretboard-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -377,11 +503,14 @@ onUnmounted(() => {
    弦列 (每根弦的行)
    ============================================ */
 .fretboard-string-row {
-  height: 3.5rem;
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
   display: flex;
   align-items: center;
   position: relative;
-  /* 不加 border-bottom — 弦之間不要有分隔線 */
+  overflow: visible;
+  /* 不加 border-bottom，讓弦之間不要有分隔線。 */
 }
 
 /* ============================================
@@ -421,7 +550,12 @@ onUnmounted(() => {
 .fretboard-cell--nut {
   border-right: 4px solid rgb(113, 113, 122);
   background: rgba(24, 24, 27, 0.9);
-  max-width: 55px;
+}
+
+/* 左手模式時，空弦欄在右側；nut 粗線要畫在 0 / 1 之間 */
+.fretboard-cell--left-handed.fretboard-cell--nut {
+  border-right: 0;
+  border-left: 4px solid rgb(113, 113, 122);
 }
 
 .fretboard-cell--in-range {
@@ -456,7 +590,6 @@ onUnmounted(() => {
    ============================================ */
 .fretboard-fret-wire {
   position: absolute;
-  left: 0;
   top: 0;
   bottom: 0;
   width: 2px;
@@ -467,6 +600,28 @@ onUnmounted(() => {
     rgba(180, 170, 150, 0.2) 100%
   );
   z-index: 0;
+}
+
+/* 低品格側邊界：右手模式時在 cell 左邊 */
+.fretboard-fret-wire--low {
+  left: 0;
+}
+
+/* 低品格側邊界：左手模式時在 cell 右邊 */
+.fretboard-cell--left-handed .fretboard-fret-wire--low {
+  left: auto;
+  right: 0;
+}
+
+/* 高品格側邊界：右手模式時補在最高 fret 的右邊，也就是 15 / 16 */
+.fretboard-fret-wire--high {
+  right: 0;
+}
+
+/* 高品格側邊界：左手模式時補在最高 fret 的左邊，也就是 15 / 16 */
+.fretboard-cell--left-handed .fretboard-fret-wire--high {
+  right: auto;
+  left: 0;
 }
 
 /* ============================================
@@ -493,7 +648,7 @@ onUnmounted(() => {
 }
 
 .fretboard-inlay-column--nut {
-  max-width: 55px;
+  position: relative;
 }
 
 .fretboard-inlay-dot {
@@ -520,8 +675,9 @@ onUnmounted(() => {
    音符基底
    ============================================ */
 .fretboard-note {
-  width: 2rem;
-  height: 2rem;
+  width: var(--fretboard-note-size);
+  height: var(--fretboard-note-size);
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -539,8 +695,13 @@ onUnmounted(() => {
 }
 
 .fretboard-note-placeholder {
-  width: 2rem;
-  height: 2rem;
+  width: var(--fretboard-note-size);
+  height: var(--fretboard-note-size);
+  flex: 0 0 auto;
+}
+
+.fretboard-note span {
+  font-size: calc(var(--fretboard-note-size) * 0.36);
 }
 
 /* ============================================
@@ -629,12 +790,16 @@ onUnmounted(() => {
    琴格編號列
    ============================================ */
 .fretboard-fret-numbers {
+  flex: 0 0 auto;
   display: flex;
-  margin-top: 0.75rem;
-  font-size: 0.875rem;
+  width: 100%;
+  margin-top: var(--fretboard-number-margin);
+  font-size: var(--fretboard-number-size);
+  line-height: 1;
   font-weight: 700;
-  color: rgb(113, 113, 122);
+  color: rgb(161, 161, 170);
   position: relative;
+  z-index: 30;
 }
 
 .fretboard-fret-number {
@@ -642,13 +807,9 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.fretboard-fret-number--nut {
-  max-width: 55px;
-}
-
 .fretboard-fret-number--marker {
   color: rgb(228, 228, 231);
-  font-size: 1rem;
+  font-size: 1.12em;
   font-weight: 900;
   border-bottom: 1px solid rgb(52, 211, 153);
   padding-bottom: 2px;

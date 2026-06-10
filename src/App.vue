@@ -16,9 +16,37 @@ import {
 } from './utils/cagedScales.js';
 import { AudioEngine } from './utils/audioEngine.js';
 
+// ===============================
+// 預設設定
+// ===============================
+// 這些值會在瀏覽器沒有保存設定時使用。
+// 若使用者已經改過設定，會優先讀取 localStorage 裡保存的值。
+const DEFAULT_KEY_ROOT = 0; // 0=C, 1=C#, 2=D ... 11=B
+const DEFAULT_PROGRESSION_NAME = 'I - IV - V';
+const DEFAULT_STAGE = 1;
+
+// 預設 BPM。
+// 第一次開啟或沒有瀏覽器保存設定時，會使用這個速度。
+const DEFAULT_BPM = 85;
+
+// BPM 可調範圍。
+// UI 按鈕與 localStorage 讀取時都會用這個範圍做限制。
+const MIN_BPM = 40;
+const MAX_BPM = 240;
+
+// 預設左右手模式。
+// false = 右手模式，true = 左手模式。
+const DEFAULT_IS_LEFT_HANDED = false;
+
+// 畫面初始顯示用。
+// 若之後有保存設定，onMounted 時會依照保存的和弦進行重新覆蓋。
+const currentChord = ref('I');
+const nextChord = ref('IV');
+
 // 基礎設定狀態
-const keyRoot = ref(0); // 0=C
-const selectedProgressionName = ref('vi - IV - I - V');
+const keyRoot = ref(DEFAULT_KEY_ROOT);
+const selectedProgressionName = ref(DEFAULT_PROGRESSION_NAME);
+const selectedStage = ref(DEFAULT_STAGE);
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const customProgressionArray = ref([]);
@@ -36,10 +64,8 @@ const progContainerRef = ref(null);
 const dragState = ref(null);
 const DRAG_THRESHOLD = 6;
 
-const bpm = ref(85);
-const allowOpenStrings = ref(true); // 永遠開啟開放弦，不再提供關閉選項
-const selectedStage = ref(5); // 階段 1-5
-const isLeftHanded = ref(false);
+const bpm = ref(DEFAULT_BPM);
+const isLeftHanded = ref(DEFAULT_IS_LEFT_HANDED);
 
 // 自訂訓練音序器狀態
 const isCustomSequenceMode = ref(false);
@@ -58,15 +84,141 @@ const isIntroPredict = ref(false);
 // 用來避免導入預告期推進的 globalBeat 讓第一輪被誤判為「已完成一輪」而推進把位。
 const isFirstChordStart = ref(true);
 const localBeat4 = ref(0);
-const currentChord = ref('vi');
-const nextChord = ref('IV');
+
 const currentChordIdx = ref(0);
 const activeNoteTarget = ref(null);
 
 let trainerAudio = null;
 
+// ===============================
+// 瀏覽器本機設定保存
+// ===============================
+// 靜態網站也可以使用 localStorage。
+// 它會把設定保存到目前瀏覽器裡，不需要後端、不需要資料庫。
+// 注意：
+// - 同一個瀏覽器、同一個網域會保留設定。
+// - 無痕模式、清除網站資料、換瀏覽器時，設定會消失。
+// - localStorage 不能保存函式，只適合保存 JSON 化的設定資料。
+const SETTINGS_STORAGE_KEY = 'caged-guitar-trainer-settings-v1';
+
+const getDefaultSettings = () => ({
+  keyRoot: DEFAULT_KEY_ROOT,
+  selectedProgressionName: DEFAULT_PROGRESSION_NAME,
+  customProgressionArray: [],
+  isCustomProgMode: false,
+  bpm: DEFAULT_BPM,
+  selectedStage: DEFAULT_STAGE,
+  isLeftHanded: DEFAULT_IS_LEFT_HANDED,
+  isCustomSequenceMode: false,
+  customSequenceInput: 'L5, L6, 1, 2, L7, 1'
+});
+
+const applySettingsToState = (settings) => {
+  const defaults = getDefaultSettings();
+  const safeSettings = {
+    ...defaults,
+    ...(settings && typeof settings === 'object' ? settings : {})
+  };
+
+  keyRoot.value = Number.isInteger(safeSettings.keyRoot)
+    ? Math.min(11, Math.max(0, safeSettings.keyRoot))
+    : defaults.keyRoot;
+
+  selectedProgressionName.value = PROGRESSION_PRESETS[safeSettings.selectedProgressionName]
+    ? safeSettings.selectedProgressionName
+    : defaults.selectedProgressionName;
+
+  customProgressionArray.value = Array.isArray(safeSettings.customProgressionArray)
+    ? safeSettings.customProgressionArray
+        .filter(item => item && typeof item.value === 'string' && CHORD_MODES[item.value])
+        .map(item => ({
+          id: typeof item.id === 'string' ? item.id : generateId(),
+          value: item.value
+        }))
+    : defaults.customProgressionArray;
+
+  isCustomProgMode.value = Boolean(safeSettings.isCustomProgMode);
+
+  // 自訂進行模式但沒有任何和弦時，避免訓練變成空進行。
+  if (isCustomProgMode.value && customProgressionArray.value.length === 0) {
+    isCustomProgMode.value = false;
+  }
+
+  bpm.value = Number.isFinite(Number(safeSettings.bpm))
+    ? Math.min(MAX_BPM, Math.max(MIN_BPM, Number(safeSettings.bpm)))
+    : defaults.bpm;
+
+  selectedStage.value = Number.isInteger(Number(safeSettings.selectedStage))
+    ? Math.min(5, Math.max(1, Number(safeSettings.selectedStage)))
+    : defaults.selectedStage;
+
+  isLeftHanded.value = Boolean(safeSettings.isLeftHanded);
+  isCustomSequenceMode.value = Boolean(safeSettings.isCustomSequenceMode);
+
+  customSequenceInput.value = typeof safeSettings.customSequenceInput === 'string'
+    ? safeSettings.customSequenceInput
+    : defaults.customSequenceInput;
+};
+
+const loadSavedSettings = () => {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+
+    // 沒有保存資料時，套用預設值：
+    // 和弦進行 = I - IV - V
+    // Stage = 1
+    if (!raw) {
+      applySettingsToState(getDefaultSettings());
+      return;
+    }
+
+    applySettingsToState(JSON.parse(raw));
+  } catch (error) {
+    console.warn('讀取本機設定失敗，改用預設設定：', error);
+    applySettingsToState(getDefaultSettings());
+  }
+};
+
+const saveSettings = () => {
+  try {
+    const settings = {
+      keyRoot: keyRoot.value,
+      selectedProgressionName: selectedProgressionName.value,
+      customProgressionArray: customProgressionArray.value,
+      isCustomProgMode: isCustomProgMode.value,
+      bpm: bpm.value,
+      selectedStage: selectedStage.value,
+      isLeftHanded: isLeftHanded.value,
+      isCustomSequenceMode: isCustomSequenceMode.value,
+      customSequenceInput: customSequenceInput.value
+    };
+
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (error) {
+    // Safari 私密模式或瀏覽器限制儲存時可能失敗。
+    // 失敗時不影響訓練功能，只是不保存設定。
+    console.warn('保存本機設定失敗：', error);
+  }
+};
+
+const syncDisplayedChordFromSettings = () => {
+  const progArray = getActiveProgression();
+
+  currentChord.value = progArray[0] || 'I';
+  nextChord.value = progArray.length > 1 ? progArray[1] : currentChord.value;
+  currentChordIdx.value = 0;
+};
+
 onMounted(() => {
+  // 先讀取瀏覽器保存設定。
+  // 如果沒有保存資料，會自動使用：
+  // - 和弦進行：I - IV - V
+  // - Stage：Stage 1
+  loadSavedSettings();
+  syncDisplayedChordFromSettings();
+
   trainerAudio = new AudioEngine();
+  syncEngineParams();
 
   // 開發時檢查 CAGED_SCALES 是否完整建立 35 個 forms。
   const scaleErrors = validateCagedScales();
@@ -333,10 +485,29 @@ const syncEngineParams = () => {
   );
 };
 
-// 監聽運動狀態，變更時動態補入參數
-watch([keyRoot, selectedProgressionName, customProgressionArray, isCustomProgMode, bpm, selectedStage, isCustomSequenceMode, customSequenceInput, cagedCycle], () => {
+// 監聽設定狀態：
+// 1. 保存到瀏覽器 localStorage。
+// 2. 同步到音訊引擎。
+// 注意：cagedCycle 是訓練進行中的暫時狀態，不需要保存。
+watch([
+  keyRoot,
+  selectedProgressionName,
+  customProgressionArray,
+  isCustomProgMode,
+  bpm,
+  selectedStage,
+  isLeftHanded,
+  isCustomSequenceMode,
+  customSequenceInput
+], () => {
+  saveSettings();
   syncEngineParams();
 }, { deep: true });
+
+// cagedCycle 只影響播放中的 CAGED 把位推進，不應該寫入 localStorage。
+watch(cagedCycle, () => {
+  syncEngineParams();
+});
 
 // 啟動訓練
 const handleTogglePlay = () => {
@@ -432,7 +603,10 @@ const exitTraining = () => {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] bg-black text-white p-4 font-sans selection:bg-emerald-500 selection:text-black">
+  <div
+    class="min-h-[100dvh] bg-black text-white font-sans selection:bg-emerald-500 selection:text-black"
+    :class="isTrainingActive ? 'h-[100dvh] overflow-hidden' : 'p-4'"
+  >
 
     <!-- 拖曳中跟隨指針的浮動字卡 (滑鼠 + 觸控通用) -->
     <div 
@@ -549,9 +723,9 @@ const exitTraining = () => {
       <div class="bg-zinc-900/40 p-5 rounded-2xl border border-zinc-800 flex flex-col justify-between">
         <h3 class="text-sm font-bold text-zinc-400 tracking-wide mb-2">3. 訓練速度 (BPM)</h3>
         <div class="flex items-center gap-4">
-          <button @click="bpm = Math.max(40, bpm - 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">-</button>
+          <button @click="bpm = Math.max(MIN_BPM, bpm - 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">-</button>
           <div class="flex-1 text-center font-black text-3xl text-zinc-100">{{ bpm }} <span class="text-xs font-normal text-zinc-500">BPM</span></div>
-          <button @click="bpm = Math.min(240, bpm + 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">+</button>
+          <button @click="bpm = Math.min(MAX_BPM, bpm + 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">+</button>
         </div>
       </div>
 
@@ -606,18 +780,10 @@ const exitTraining = () => {
       </button>
     </div>
 
-    <div v-else class="min-h-[100dvh] flex flex-col justify-between max-w-5xl mx-auto py-4 space-y-4">
-      
-      <button 
-        @click="toggleFullscreen"
-        class="absolute right-4 top-4 z-20 px-3 py-1.5 text-xs font-bold rounded-lg border bg-zinc-900/80 border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-all"
-        :title="isFullscreen ? '退出全螢幕' : '全螢幕顯示'"
-      >
-        {{ isFullscreen ? '🗗' : '⛶' }}
-      </button>
+    <div v-else class="training-screen flex flex-col w-full max-w-none mx-auto">
 
-      <div class="text-center py-6 flex flex-col items-center justify-center relative">
-        <div class="flex gap-4 mb-4">
+      <div class="train-header text-center py-6 flex flex-col items-center justify-center relative">
+        <div class="train-dots flex gap-4 mb-4">
           <div 
             v-for="b in [0, 1, 2, 3]" :key="b"
             class="w-4 h-4 rounded-full border transition-all duration-75"
@@ -630,7 +796,7 @@ const exitTraining = () => {
         </div>
 
         <!-- 所選和弦進行：高亮目前所在的和弦 -->
-        <div class="flex flex-wrap gap-2 justify-center mb-5">
+        <div class="train-prog flex flex-wrap gap-2 justify-center mb-5">
           <template v-for="(chord, idx) in activeProgressionList" :key="idx">
             <span 
               class="px-3 py-1.5 rounded-lg font-black text-base sm:text-lg border transition-all duration-150"
@@ -647,7 +813,7 @@ const exitTraining = () => {
         <div class="relative w-full flex items-center justify-center">
           <!-- 當前和弦永遠置中；非預告期時奇數拍縮小、其餘維持正常大小，預告期維持原尺寸 -->
           <h1 
-            class="relative text-7xl sm:text-8xl md:text-9xl font-black text-red-500 tracking-widest transition-transform duration-200 ease-out" 
+            class="chord-big relative text-7xl sm:text-8xl md:text-9xl font-black text-red-500 tracking-widest transition-transform duration-200 ease-out" 
             :class="[
               currentPhase === 'predict' ? 'scale-100' : (localBeat4 % 2 === 1 ? 'scale-90' : 'scale-100'),
               isIntroPredict ? 'chord-flash' : ''
@@ -659,26 +825,37 @@ const exitTraining = () => {
                  導入預告期 (isIntroPredict) 只讓第一個和弦置中閃爍，不顯示下一個和弦。 -->
             <span 
               v-if="currentPhase === 'predict' && !isIntroPredict"
-              class="absolute left-full top-0 ml-3 sm:ml-5 flex items-center gap-3 sm:gap-5 whitespace-nowrap"
+              class="absolute left-full top-1/2 -translate-y-1/2 ml-3 sm:ml-5 flex items-center gap-3 sm:gap-5 whitespace-nowrap"
             >
-              <span class="text-5xl sm:text-7xl font-black text-zinc-500 leading-none">→</span>
-              <span class="font-black tracking-widest chord-flash" :style="flashStyle">
+              <span class="font-black text-zinc-500 leading-none" style="font-size: 0.6em;">→</span>
+              <span class="font-black tracking-widest chord-flash leading-none" :style="flashStyle">
                 {{ nextChord }}
               </span>
             </span>
           </h1>
         </div>
-        <p class="text-xl text-zinc-400 font-medium mt-1">
+        <p class="train-subtitle text-xl text-zinc-400 font-medium mt-1">
           {{ NOTE_NAMES[(keyRoot + CHORD_MODES[currentChord]?.offset) % 12] }} {{ CHORD_MODES[currentChord]?.label }} 和弦時間 
           <span class="text-zinc-600 text-sm ml-2">({{ CHORD_MODES[currentChord]?.modeName }} Mode)</span>
         </p>
-        
-        <div class="absolute right-4 top-4 text-xs font-mono px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-emerald-400 uppercase tracking-widest">
-          {{ currentPhase }} phase
+      </div>
+
+      <!-- 和弦時間下一列：左側為退出特訓 (較小、不常用)，右側為目前把位。 -->
+      <div class="train-controls flex items-center justify-between gap-2 w-full px-1">
+        <div class="flex items-center gap-2">
+          <button
+            @click="exitTraining"
+            class="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 font-bold rounded-lg text-zinc-500 text-xs transition-all cursor-pointer"
+          >
+            ✕ 退出特訓
+          </button>
+        </div>
+        <div class="flex items-center text-zinc-400 font-bold text-xs sm:text-sm whitespace-nowrap">
+          目前把位:<span class="text-emerald-400 ml-1.5 text-base sm:text-lg">{{ currentFormName }} 型</span>
         </div>
       </div>
 
-      <div class="w-full">
+      <div class="train-fretboard-wrap w-full">
         <Fretboard 
           :keyRoot="keyRoot" 
           :currentChord="currentChord" 
@@ -688,26 +865,7 @@ const exitTraining = () => {
           :currentPhase="currentPhase"
           :activeNoteTarget="activeNoteTarget"
           :prepChordVoicingNotes="prepChordVoicingNotes"
-          :allowOpenStrings="false"
         />
-      </div>
-
-      <div class="grid grid-cols-3 gap-4 items-center bg-zinc-900/30 p-4 rounded-2xl border border-zinc-900">
-        <button @click="exitTraining" class="py-4 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 font-bold rounded-xl text-zinc-400 text-sm transition-all cursor-pointer">
-          ✕ 退出特訓
-        </button>
-
-        <button 
-          @click="handleTogglePlay" 
-          class="py-5 rounded-xl font-black text-lg tracking-wider transition-all cursor-pointer shadow-lg"
-          :class="isPlaying ? 'bg-amber-500 hover:bg-amber-400 text-black' : 'bg-emerald-500 hover:bg-emerald-400 text-black'"
-        >
-          {{ isPlaying ? '⏸️ PAUSE' : '▶️ RESUME' }}
-        </button>
-
-        <div class="flex items-center justify-end pr-2 text-zinc-400 font-bold text-sm">
-          目前把位: <span class="text-emerald-400 ml-2 text-lg">{{ currentFormName }} 型</span>
-        </div>
       </div>
 
     </div>
@@ -770,5 +928,86 @@ const exitTraining = () => {
 .chord-flash {
   animation: chordFlash 0.22s steps(1, end) infinite;
   will-change: color;
+}
+
+/* ============================================
+   特訓畫面：固定為一個視窗高，內部以 flex 分配，
+   確保 PC / iPad 橫屏 / iPhone 橫屏 皆「不需上下捲動」即可看到所有元素。
+   ============================================ */
+.training-screen {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  overflow: hidden;
+  /* 避開 iPhone 瀏海 / 圓角 / Home Indicator 等安全區域。 */
+  padding:
+    calc(0.75rem + env(safe-area-inset-top))
+    calc(1rem + env(safe-area-inset-right))
+    calc(0.75rem + env(safe-area-inset-bottom))
+    calc(1rem + env(safe-area-inset-left));
+  gap: 0.5rem;
+}
+
+/* 指板區塊吃掉剩餘高度，並置中；Fretboard 內部會依此可用高度自動縮放。 */
+.train-fretboard-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding-bottom: max(0.15rem, env(safe-area-inset-bottom));
+}
+
+/* 和弦時間下一列的控制列：左退出/暫停、右目前把位。 */
+.train-controls {
+  flex: 0 0 auto;
+}
+
+/* 橫向且高度受限 (手機橫屏 / 小平板橫屏)：壓縮上方資訊區與字級，把空間讓給指板。 */
+@media (orientation: landscape) and (max-height: 600px) {
+  .training-screen {
+    padding:
+      calc(0.35rem + env(safe-area-inset-top))
+      calc(0.25rem + env(safe-area-inset-right))
+      calc(0.35rem + env(safe-area-inset-bottom))
+      calc(0.25rem + env(safe-area-inset-left));
+    gap: 0.25rem;
+  }
+
+  .train-header {
+    padding-top: 0.1rem !important;
+    padding-bottom: 0.1rem !important;
+  }
+
+  .train-dots {
+    margin-bottom: 0.35rem !important;
+    gap: 0.6rem !important;
+  }
+
+  .train-prog {
+    margin-bottom: 0.4rem !important;
+  }
+
+  .chord-big {
+    font-size: 3.25rem !important;
+    line-height: 1 !important;
+  }
+
+  .train-subtitle {
+    font-size: 0.8rem !important;
+    margin-top: 0.15rem !important;
+  }
+}
+
+/* 更矮的橫屏 (典型 iPhone 橫屏 ≤ 430px 高)：再進一步收斂，但保留「和弦時間」字樣。 */
+@media (orientation: landscape) and (max-height: 430px) {
+  .chord-big {
+    font-size: 2.5rem !important;
+  }
+  .train-subtitle {
+    font-size: 0.7rem !important;
+    margin-top: 0.1rem !important;
+  }
 }
 </style>
