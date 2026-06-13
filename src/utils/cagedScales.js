@@ -119,34 +119,87 @@ export const MODE_DEFINITIONS = {
 };
 
 /**
- * Train Phase 的階段定義。
- * 第 5 階段會直接使用完整調式音階。
+ * Train Phase 的階段模式定義。
+ *
+ * chord：和弦基礎。每個 Stage 以三和弦為核心，只加入指定色彩音。
+ * scale：音階基礎。先掌握大小三和弦，再進入五聲音階，最後解鎖完整調式。
+ *
+ * 注意：9th / 11th / 13th 在 CAGED_SCALES 內分別以 2 / 4 / 6 顯示。
+ * 若該調式實際是 b2、#4、b6，resolveStageIntervals() 會保留符合該調式的版本。
  */
-export const TRAINING_STAGES = {
-  major: {
-    1: ['1', '3', '5'],
-    2: ['1', '2', '3', '5'],
-    3: ['1', '2', '3', '5', '6'],
-    4: ['1', '2', '3', '5', '6', '7', 'b7'],
-    5: 'fullScale'
+export const TRAINING_STAGE_MODES = Object.freeze({
+  chord: {
+    label: '和弦基礎',
+    subtitle: 'Triad → 7th / 9th / 11th / 13th',
+    stageCount: 5,
+    descriptions: {
+      1: { title: '三和弦', detail: 'Major：1, 3, 5 / Minor：1, ♭3, 5' },
+      2: { title: '三和弦 + 7th', detail: '在三和弦上加入 7 或 ♭7 的色彩' },
+      3: { title: '三和弦 + 9th', detail: '在三和弦上加入 9th；Phrygian / Locrian 會使用 ♭9' },
+      4: { title: '三和弦 + 11th', detail: '在三和弦上加入 11th；Lydian 會使用 #11' },
+      5: { title: '三和弦 + 13th', detail: '在三和弦上加入 13th；小調色彩會依調式保留 6 或 ♭6' }
+    }
   },
 
-  minor: {
-    1: ['1', 'b3', '5'],
-    2: ['1', 'b3', '4', '5'],
-    3: ['1', 'b3', '4', '5', 'b7'],
-    4: ['1', '2', 'b3', '4', '5', 'b7'],
-    5: 'fullScale'
-  },
-
-  dim: {
-    1: ['1', 'b3', 'b5'],
-    2: ['1', 'b3', '4', 'b5'],
-    3: ['1', 'b3', '4', 'b5', 'b7'],
-    4: ['1', 'b2', 'b3', '4', 'b5', 'b6', 'b7'],
-    5: 'fullScale'
+  scale: {
+    label: '音階基礎',
+    subtitle: 'Triad → Pentatonic → Mode Scale',
+    stageCount: 3,
+    descriptions: {
+      1: { title: '大小三和弦', detail: 'Major Triad：1, 3, 5 / Minor Triad：1, ♭3, 5' },
+      2: { title: '大小五聲音階', detail: 'Major Pentatonic：1, 2, 3, 5, 6 / Minor Pentatonic：1, ♭3, 4, 5, ♭7' },
+      3: { title: '調式音階', detail: '解鎖目前和弦對應的完整 Mode Scale' }
+    }
   }
-};
+});
+
+export const TRAINING_STAGES = Object.freeze({
+  chord: {
+    major: {
+      1: ['1', '3', '5'],
+      2: ['1', '3', '5', '7', 'b7'],
+      3: ['1', '3', '5', '2', 'b2'],
+      4: ['1', '3', '5', '4', '#4'],
+      5: ['1', '3', '5', '6', 'b6']
+    },
+
+    minor: {
+      1: ['1', 'b3', '5'],
+      2: ['1', 'b3', '5', 'b7', '7'],
+      3: ['1', 'b3', '5', '2', 'b2'],
+      4: ['1', 'b3', '5', '4', '#4'],
+      5: ['1', 'b3', '5', '6', 'b6']
+    },
+
+    dim: {
+      1: ['1', 'b3', 'b5'],
+      2: ['1', 'b3', 'b5', 'b7', '7'],
+      3: ['1', 'b3', 'b5', '2', 'b2'],
+      4: ['1', 'b3', 'b5', '4', '#4'],
+      5: ['1', 'b3', 'b5', '6', 'b6']
+    }
+  },
+
+  scale: {
+    major: {
+      1: ['1', '3', '5'],
+      2: ['1', '2', '3', '5', '6'],
+      3: 'fullScale'
+    },
+
+    minor: {
+      1: ['1', 'b3', '5'],
+      2: ['1', 'b3', '4', '5', 'b7'],
+      3: 'fullScale'
+    },
+
+    dim: {
+      1: ['1', 'b3', 'b5'],
+      2: ['1', 'b3', '4', 'b5', 'b7'],
+      3: 'fullScale'
+    }
+  }
+});
 
 /**
  * 把靜態資料列轉成原本程式使用的 note 物件。
@@ -2463,17 +2516,23 @@ function getTrainingFamily(chordConfig) {
   return 'major';
 }
 
-export function resolveStageIntervals(chordConfig, scaleShape, stage) {
+export function resolveStageIntervals(chordConfig, scaleShape, stage, stageMode = 'chord') {
+  const safeStageMode = TRAINING_STAGES[stageMode] ? stageMode : 'chord';
   const stageNumber = Number(stage);
-  if (!chordConfig || !scaleShape || stageNumber >= 5) return 'fullScale';
+  const modeConfig = TRAINING_STAGE_MODES[safeStageMode] || TRAINING_STAGE_MODES.chord;
+
+  if (!chordConfig || !scaleShape) return 'fullScale';
+  if (!Number.isFinite(stageNumber) || stageNumber < 1 || stageNumber > modeConfig.stageCount) {
+    return 'fullScale';
+  }
 
   const family = getTrainingFamily(chordConfig);
-  const stageDef = TRAINING_STAGES[family]?.[stageNumber] || 'fullScale';
+  const stageDef = TRAINING_STAGES[safeStageMode]?.[family]?.[stageNumber] || 'fullScale';
 
   if (stageDef === 'fullScale') return 'fullScale';
 
   // 只保留目前調式真的存在的音程。
-  // 例如 Ionian 沒有 b7，Mixolydian 沒有 7。
+  // 例如 Ionian 沒有 b7，Mixolydian 沒有 7，Lydian 沒有自然 4。
   const modeIntervals = new Set(
     MODE_DEFINITIONS[scaleShape.modeKey].intervals.map(item => item.interval)
   );
@@ -2494,6 +2553,7 @@ export function generateCagedScaleSequence(
   chordDegreeStr,
   formObj,
   stage,
+  stageMode = 'chord',
   allowOpen = false
 ) {
   const chordConfig = CHORD_MODES[chordDegreeStr];
@@ -2501,7 +2561,7 @@ export function generateCagedScaleSequence(
 
   if (!chordConfig || !scaleShape || !formObj) return [];
 
-  const allowedIntervals = resolveStageIntervals(chordConfig, scaleShape, stage);
+  const allowedIntervals = resolveStageIntervals(chordConfig, scaleShape, stage, stageMode);
   const rootFret = getRootFret(formObj);
   const noteById = new Map(scaleShape.notes.map(note => [note.id, note]));
 

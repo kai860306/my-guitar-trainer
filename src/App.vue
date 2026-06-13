@@ -12,7 +12,8 @@ import {
 import {
   generateCagedScaleSequence,
   validateCagedScales,
-  getCagedScaleBounds
+  getCagedScaleBounds,
+  TRAINING_STAGE_MODES
 } from './utils/cagedScales.js';
 import { AudioEngine } from './utils/audioEngine.js';
 
@@ -23,6 +24,7 @@ import { AudioEngine } from './utils/audioEngine.js';
 // 若使用者已經改過設定，會優先讀取 localStorage 裡保存的值。
 const DEFAULT_KEY_ROOT = 0; // 0=C, 1=C#, 2=D ... 11=B
 const DEFAULT_PROGRESSION_NAME = 'I - IV - V';
+const DEFAULT_TRAINING_STAGE_MODE = 'chord';
 const DEFAULT_STAGE = 1;
 
 // 預設 BPM。
@@ -38,6 +40,11 @@ const MAX_BPM = 240;
 // false = 右手模式，true = 左手模式。
 const DEFAULT_IS_LEFT_HANDED = false;
 
+// 預設指板音程顯示基準。
+// chord = 從目前和弦根音看音程。
+// key = 從目前 Key 根音看音程。
+const DEFAULT_INTERVAL_DISPLAY_MODE = 'chord';
+
 // 畫面初始顯示用。
 // 若之後有保存設定，onMounted 時會依照保存的和弦進行重新覆蓋。
 const currentChord = ref('I');
@@ -46,30 +53,58 @@ const nextChord = ref('IV');
 // 基礎設定狀態
 const keyRoot = ref(DEFAULT_KEY_ROOT);
 const selectedProgressionName = ref(DEFAULT_PROGRESSION_NAME);
+const selectedTrainingStageMode = ref(DEFAULT_TRAINING_STAGE_MODE);
 const selectedStage = ref(DEFAULT_STAGE);
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const customProgressionArray = ref([]);
-// 可用和弦庫 (依性質分類，方便日後擴充)
+// 可用和弦庫（依性質分類，方便日後擴充）
 const chordLibrary = [
   { label: '順階三和弦', chords: ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'] },
   { label: '順階七和弦', chords: ['IM7', 'iim7', 'iiim7', 'IVM7', 'V7', 'vim7', 'viim7b5'] },
-  { label: '調外 / 借用和弦', chords: ['bIII', 'bVI', 'bVII', 'vii°7'] }
+  { label: '同主調三和弦', chords: ['i', 'ii°', 'bIII', 'iv', 'v', 'bVI', 'bVII'] },
+  { label: '同主調七和弦', chords: ['im7', 'iim7b5', 'bIIIM7', 'ivm7', 'vm7', 'bVIM7', 'bVII7'] },
+  { label: '副屬七和弦', chords: ['V7/ii', 'V7/iii', 'V7/IV', 'V7/V', 'V7/vi'] },
+  { label: '關聯 II', chords: ['IIm7b5/ii', 'IIm7b5/iii', 'IIm7/IV', 'IIm7/V', 'IIm7b5/vi'] },
+  { label: '裏和弦（SubV7）', chords: ['SubV7/I', 'SubV7/ii', 'SubV7/iii', 'SubV7/IV', 'SubV7/V', 'SubV7/vi'] }
 ];
 const activeGap = ref(null);
 const isCustomProgMode = ref(false);
 
+// 自訂音序器預設值與可用音程字卡。
+// 這裡沿用原本手輸入音序器的 token 規則：1-7 是順階度數，L1-L7 是低八度順階度數。
+const DEFAULT_CUSTOM_SEQUENCE = ['L5', 'L6', '1', '2', 'L7', '1'];
+const sequenceLibrary = [
+  { label: '低音順階度數', tokens: ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'] },
+  { label: '順階度數', tokens: ['1', '2', '3', '4', '5', '6', '7'] },
+  { label: '高音順階度數', tokens: ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7'] }
+];
+const sequenceTokenSet = new Set(sequenceLibrary.flatMap(group => group.tokens));
+const isValidSequenceToken = (token) => sequenceTokenSet.has(token);
+const createSequenceCards = (tokens = DEFAULT_CUSTOM_SEQUENCE) => {
+  return tokens
+    .filter(isValidSequenceToken)
+    .map(value => ({ id: generateId(), value }));
+};
+
 // 統一的指針拖曳狀態 (同時支援滑鼠與觸控)
 const progContainerRef = ref(null);
+const sequenceContainerRef = ref(null);
+const activeSequenceGap = ref(null);
 const dragState = ref(null);
 const DRAG_THRESHOLD = 6;
 
 const bpm = ref(DEFAULT_BPM);
 const isLeftHanded = ref(DEFAULT_IS_LEFT_HANDED);
 
+// 指板上的音程顯示方式。
+// chord：例如在 V 和弦上，G 會顯示 1。
+// key：例如在 C Key 裡，G 會顯示 5。
+const intervalDisplayMode = ref(DEFAULT_INTERVAL_DISPLAY_MODE);
+
 // 自訂訓練音序器狀態
 const isCustomSequenceMode = ref(false);
-const customSequenceInput = ref('L5, L6, 1, 2, L7, 1');
+const customSequenceArray = ref(createSequenceCards());
 
 // 運行與 UI 切換狀態
 const isTrainingActive = ref(false); // 點擊 Start 切換至極簡運動 UI
@@ -107,10 +142,12 @@ const getDefaultSettings = () => ({
   customProgressionArray: [],
   isCustomProgMode: false,
   bpm: DEFAULT_BPM,
+  selectedTrainingStageMode: DEFAULT_TRAINING_STAGE_MODE,
   selectedStage: DEFAULT_STAGE,
   isLeftHanded: DEFAULT_IS_LEFT_HANDED,
+  intervalDisplayMode: DEFAULT_INTERVAL_DISPLAY_MODE,
   isCustomSequenceMode: false,
-  customSequenceInput: 'L5, L6, 1, 2, L7, 1'
+  customSequenceArray: createSequenceCards()
 });
 
 const applySettingsToState = (settings) => {
@@ -148,16 +185,34 @@ const applySettingsToState = (settings) => {
     ? Math.min(MAX_BPM, Math.max(MIN_BPM, Number(safeSettings.bpm)))
     : defaults.bpm;
 
+  selectedTrainingStageMode.value = TRAINING_STAGE_MODES[safeSettings.selectedTrainingStageMode]
+    ? safeSettings.selectedTrainingStageMode
+    : defaults.selectedTrainingStageMode;
+
+  const maxStage = TRAINING_STAGE_MODES[selectedTrainingStageMode.value]?.stageCount || 5;
   selectedStage.value = Number.isInteger(Number(safeSettings.selectedStage))
-    ? Math.min(5, Math.max(1, Number(safeSettings.selectedStage)))
+    ? Math.min(maxStage, Math.max(1, Number(safeSettings.selectedStage)))
     : defaults.selectedStage;
 
   isLeftHanded.value = Boolean(safeSettings.isLeftHanded);
+
+  // 舊版 localStorage 沒有這個欄位時，會自動回到 chord 顯示。
+  intervalDisplayMode.value = safeSettings.intervalDisplayMode === 'key'
+    ? 'key'
+    : 'chord';
+
   isCustomSequenceMode.value = Boolean(safeSettings.isCustomSequenceMode);
 
-  customSequenceInput.value = typeof safeSettings.customSequenceInput === 'string'
-    ? safeSettings.customSequenceInput
-    : defaults.customSequenceInput;
+  customSequenceArray.value = Array.isArray(safeSettings.customSequenceArray)
+    ? safeSettings.customSequenceArray
+        .filter(item => item && typeof item.value === 'string' && isValidSequenceToken(item.value))
+        .map(item => ({
+          id: typeof item.id === 'string' ? item.id : generateId(),
+          value: item.value
+        }))
+    : defaults.customSequenceArray;
+
+  // 自訂音序器如果被清空，保留空狀態，讓畫面明確提示使用者拖曳音程加入。
 };
 
 const loadSavedSettings = () => {
@@ -187,10 +242,12 @@ const saveSettings = () => {
       customProgressionArray: customProgressionArray.value,
       isCustomProgMode: isCustomProgMode.value,
       bpm: bpm.value,
+      selectedTrainingStageMode: selectedTrainingStageMode.value,
       selectedStage: selectedStage.value,
       isLeftHanded: isLeftHanded.value,
+      intervalDisplayMode: intervalDisplayMode.value,
       isCustomSequenceMode: isCustomSequenceMode.value,
-      customSequenceInput: customSequenceInput.value
+      customSequenceArray: customSequenceArray.value
     };
 
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -265,19 +322,59 @@ const getActiveProgression = () => {
 };
 
 // 依指針位置計算插入縫隙索引
-const updateActiveGap = (clientX) => {
-  const container = progContainerRef.value;
-  if (!container) { activeGap.value = null; return; }
-  const cards = Array.from(container.querySelectorAll('[data-prog-card]'))
+const updateActiveGapByConfig = (clientX, containerRef, gapRef, cardSelector) => {
+  const container = containerRef.value;
+  if (!container) { gapRef.value = null; return; }
+
+  const cards = Array.from(container.querySelectorAll(cardSelector))
     .filter(c => !c.classList.contains('list-leave-active'));
-  if (cards.length === 0) { activeGap.value = 0; return; }
+
+  if (cards.length === 0) { gapRef.value = 0; return; }
+
   let targetIndex = cards.length;
   for (let i = 0; i < cards.length; i++) {
     const rect = cards[i].getBoundingClientRect();
     const cardCenter = rect.left + rect.width / 2;
     if (clientX < cardCenter) { targetIndex = i; break; }
   }
-  activeGap.value = targetIndex;
+  gapRef.value = targetIndex;
+};
+
+const updateActiveGap = (clientX) => {
+  updateActiveGapByConfig(clientX, progContainerRef, activeGap, '[data-prog-card]');
+};
+
+const updateActiveSequenceGap = (clientX) => {
+  updateActiveGapByConfig(clientX, sequenceContainerRef, activeSequenceGap, '[data-sequence-card]');
+};
+
+const resetDragState = () => {
+  dragState.value = null;
+  activeGap.value = null;
+  activeSequenceGap.value = null;
+};
+
+const isProgressionDragSource = (source) => {
+  return source === 'library' || source === 'progression';
+};
+
+const isSequenceDragSource = (source) => {
+  return source === 'sequenceLibrary' || source === 'sequence';
+};
+
+const moveCardInArray = (arrayRef, oldIdx, targetIndex) => {
+  const needMove = oldIdx !== targetIndex && oldIdx + 1 !== targetIndex;
+  const adjusted = targetIndex > oldIdx ? targetIndex - 1 : targetIndex;
+
+  // 不論順序有無改變，都把被拖曳的字卡「換上全新的 id」後重新插入。
+  // 拖曳期間該字卡為 display:none 而失去版面座標，若直接還原，
+  // TransitionGroup 會誤判其移動前座標為 (0,0) 而觸發從左上角飛入的 FLIP。
+  // 換新 id → Vue 視為全新進場 (enter)，套用 .list-enter 原地淡入縮放動畫，
+  // 徹底避開破圖；其餘被擠開的字卡仍保有座標，照常以 .list-move 平滑滑動。
+  const finalIdx = needMove ? adjusted : oldIdx;
+  const cardObj = arrayRef.value[oldIdx];
+  arrayRef.value.splice(oldIdx, 1);
+  arrayRef.value.splice(finalIdx, 0, { id: generateId(), value: cardObj.value });
 };
 
 const onDragPointerMove = (e) => {
@@ -290,7 +387,12 @@ const onDragPointerMove = (e) => {
     st.dragging = true;
   }
   e.preventDefault();
-  updateActiveGap(e.clientX);
+
+  if (isProgressionDragSource(st.source)) {
+    updateActiveGap(e.clientX);
+  } else if (isSequenceDragSource(st.source)) {
+    updateActiveSequenceGap(e.clientX);
+  }
 };
 
 const onDragPointerUp = () => {
@@ -301,51 +403,70 @@ const onDragPointerUp = () => {
   if (!st) return;
 
   if (st.dragging) {
-    const targetIndex = activeGap.value !== null ? activeGap.value : customProgressionArray.value.length;
     if (st.source === 'library') {
+      const targetIndex = activeGap.value !== null ? activeGap.value : customProgressionArray.value.length;
       customProgressionArray.value.splice(targetIndex, 0, { id: generateId(), value: st.item });
-      dragState.value = null;
-      activeGap.value = null;
+      resetDragState();
       syncEngineParams();
       return;
-    } else if (st.source === 'progression') {
-      const oldIdx = st.item;
-      const needMove = oldIdx !== targetIndex && oldIdx + 1 !== targetIndex;
-      const adjusted = targetIndex > oldIdx ? targetIndex - 1 : targetIndex;
-      dragState.value = null;
-      activeGap.value = null;
-      // 不論順序有無改變，都把被拖曳的字卡「換上全新的 id」後重新插入。
-      // 拖曳期間該字卡為 display:none 而失去版面座標，若直接還原，
-      // TransitionGroup 會誤判其移動前座標為 (0,0) 而觸發從左上角飛入的 FLIP。
-      // 換新 id → Vue 視為全新進場 (enter)，套用 .list-enter 原地淡入縮放動畫，
-      // 徹底避開破圖；其餘被擠開的字卡仍保有座標，照常以 .list-move 平滑滑動。
-      const finalIdx = needMove ? adjusted : oldIdx;
-      const chordObj = customProgressionArray.value[oldIdx];
-      customProgressionArray.value.splice(oldIdx, 1);
-      customProgressionArray.value.splice(finalIdx, 0, { id: generateId(), value: chordObj.value });
+    }
+
+    if (st.source === 'progression') {
+      const targetIndex = activeGap.value !== null ? activeGap.value : customProgressionArray.value.length;
+      moveCardInArray(customProgressionArray, st.item, targetIndex);
+      resetDragState();
+      syncEngineParams();
+      return;
+    }
+
+    if (st.source === 'sequenceLibrary') {
+      const targetIndex = activeSequenceGap.value !== null ? activeSequenceGap.value : customSequenceArray.value.length;
+      customSequenceArray.value.splice(targetIndex, 0, { id: generateId(), value: st.item });
+      resetDragState();
+      syncEngineParams();
+      return;
+    }
+
+    if (st.source === 'sequence') {
+      const targetIndex = activeSequenceGap.value !== null ? activeSequenceGap.value : customSequenceArray.value.length;
+      moveCardInArray(customSequenceArray, st.item, targetIndex);
+      resetDragState();
       syncEngineParams();
       return;
     }
   } else {
-    // 未超過拖曳門檻 → 視為點擊：library 新增 / progression 移除
+    // 未超過拖曳門檻 → 視為點擊：library 新增 / 已選字卡移除。
     if (st.source === 'library') {
       addChord(st.item);
     } else if (st.source === 'progression') {
       removeChord(st.item);
+    } else if (st.source === 'sequenceLibrary') {
+      addSequenceToken(st.item);
+    } else if (st.source === 'sequence') {
+      removeSequenceToken(st.item);
     }
   }
 
-  dragState.value = null;
-  activeGap.value = null;
+  resetDragState();
+};
+
+const getDragLabel = (item, source) => {
+  if (source === 'library' || source === 'sequenceLibrary') return item;
+  if (source === 'progression') return customProgressionArray.value[item]?.value || '';
+  if (source === 'sequence') return customSequenceArray.value[item]?.value || '';
+  return '';
 };
 
 const startDrag = (e, item, source) => {
-  // 滑鼠僅響應左鍵；觸控/筆皆可
+  // 滑鼠僅響應左鍵；觸控/筆皆可。
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+  activeGap.value = null;
+  activeSequenceGap.value = null;
   dragState.value = {
     item,
     source,
-    label: source === 'library' ? item : customProgressionArray.value[item].value,
+    label: getDragLabel(item, source),
     pointerId: e.pointerId,
     startX: e.clientX,
     startY: e.clientY,
@@ -368,9 +489,23 @@ const removeChord = (index) => {
   syncEngineParams();
 };
 
-// 解析自訂音序代號
+const addSequenceToken = (tokenValue) => {
+  if (!isValidSequenceToken(tokenValue)) return;
+  customSequenceArray.value.push({ id: generateId(), value: tokenValue });
+  syncEngineParams();
+};
+
+const removeSequenceToken = (index) => {
+  customSequenceArray.value.splice(index, 1);
+  syncEngineParams();
+};
+
+// 解析自訂音序字卡。
+// 後面的 AudioEngine 仍然收到原本的 token 陣列，因此音高映射演算法不需要重寫。
 const getCustomSequenceTokens = () => {
-  return customSequenceInput.value.split(',').map(s => s.trim());
+  return customSequenceArray.value
+    .map(item => typeof item === 'string' ? item : item.value)
+    .filter(isValidSequenceToken);
 };
 
 const cagedCycle = ref(0);
@@ -390,6 +525,30 @@ const flashStyle = computed(() => ({
 
 // 🎵 訓練頁面顯示用的當前和弦進行清單 (供高亮目前和弦)
 const activeProgressionList = computed(() => getActiveProgression());
+
+// 🎯 音程特訓 Stage 模式：和弦基礎 / 音階基礎。
+const activeTrainingStageConfig = computed(() => {
+  return TRAINING_STAGE_MODES[selectedTrainingStageMode.value] || TRAINING_STAGE_MODES.chord;
+});
+
+const activeTrainingStageNumbers = computed(() => {
+  return Array.from({ length: activeTrainingStageConfig.value.stageCount }, (_, index) => index + 1);
+});
+
+const currentTrainingStageDescription = computed(() => {
+  return activeTrainingStageConfig.value.descriptions[selectedStage.value] || {
+    title: '自動模式',
+    detail: '依目前選擇的演算法產生訓練音程序列'
+  };
+});
+
+const setTrainingStageMode = (modeKey) => {
+  if (!TRAINING_STAGE_MODES[modeKey]) return;
+  selectedTrainingStageMode.value = modeKey;
+
+  const maxStage = TRAINING_STAGE_MODES[modeKey].stageCount;
+  selectedStage.value = Math.min(maxStage, Math.max(1, Number(selectedStage.value) || 1));
+};
 
 // 🎯 指板視覺專用的把位：預告期 (predict) 時提前切換到「下一個目標和弦」的 CAGED 把位，
 //          讓音階虛線半透明長方形提前導航使用者下一個要找音的區間。
@@ -466,6 +625,7 @@ const syncEngineParams = () => {
     activeChord,
     activeForm,
     selectedStage.value,
+    selectedTrainingStageMode.value,
     false
   );
 
@@ -495,10 +655,12 @@ watch([
   customProgressionArray,
   isCustomProgMode,
   bpm,
+  selectedTrainingStageMode,
   selectedStage,
   isLeftHanded,
+  intervalDisplayMode,
   isCustomSequenceMode,
-  customSequenceInput
+  customSequenceArray
 ], () => {
   saveSettings();
   syncEngineParams();
@@ -738,10 +900,24 @@ const exitTraining = () => {
           </div>
         </div>
 
-        <div v-if="!isCustomSequenceMode" class="space-y-2">
-          <div class="grid grid-cols-5 gap-2">
-            <button 
-              v-for="s in [1,2,3,4,5]" :key="s"
+        <div v-if="!isCustomSequenceMode" class="space-y-3">
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="(modeConfig, modeKey) in TRAINING_STAGE_MODES"
+              :key="modeKey"
+              @click="setTrainingStageMode(modeKey)"
+              class="p-3 rounded-xl border text-left transition-all"
+              :class="selectedTrainingStageMode === modeKey ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+            >
+              <div class="font-black text-sm">{{ modeConfig.label }}</div>
+              <div class="text-[0.65rem] opacity-70 mt-1 leading-snug">{{ modeConfig.subtitle }}</div>
+            </button>
+          </div>
+
+          <div class="grid gap-2" :class="selectedTrainingStageMode === 'scale' ? 'grid-cols-3' : 'grid-cols-5'">
+            <button
+              v-for="s in activeTrainingStageNumbers"
+              :key="selectedTrainingStageMode + '-stage-' + s"
               @click="selectedStage = s"
               class="py-3 rounded-xl border font-bold text-sm transition-all"
               :class="selectedStage === s ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500'"
@@ -749,23 +925,63 @@ const exitTraining = () => {
               Stage {{ s }}
             </button>
           </div>
+
           <div class="text-xs text-zinc-500 text-center pt-1 leading-relaxed">
-            <p v-if="selectedStage === 1"><span class="font-bold text-emerald-400">【三和弦】</span> 大調(1, 3, 5) / 小調(1, ♭3, 5)</p>
-            <p v-else-if="selectedStage === 2"><span class="font-bold text-emerald-400">【增加音】</span> 大調(+2度) / 小調(+4度)</p>
-            <p v-else-if="selectedStage === 3"><span class="font-bold text-emerald-400">【五聲音階】</span> 大調(1, 2, 3, 5, 6) / 小調(1, ♭3, 4, 5, ♭7)</p>
-            <p v-else-if="selectedStage === 4"><span class="font-bold text-emerald-400">【七度色彩】</span> 五聲 + 大/小七度</p>
-            <p v-else><span class="font-bold text-emerald-400">【自然音階】</span> 解鎖該把位調式全自然音</p>
+            <p>
+              <span class="font-bold text-emerald-400">【{{ currentTrainingStageDescription.title }}】</span>
+              {{ currentTrainingStageDescription.detail }}
+            </p>
           </div>
         </div>
 
-        <div v-else class="space-y-2">
-          <input 
-            type="text" v-model="customSequenceInput"
-            class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-center font-mono font-bold text-amber-400 text-lg focus:outline-none focus:border-amber-500"
-            placeholder="輸入相對級數，如: L5, L6, 1, 2, L7, 1"
-          />
-          <p class="text-xs text-zinc-500 text-center">
-            💡 支援 <span class="text-zinc-300">1-7</span> 代表順階度數，前綴 <span class="text-zinc-300">L</span> 代表低音。後台會依據當前和弦自動切換調式（Mode）防跑調。
+        <div v-else class="space-y-3">
+          <!-- 已選音程序列 (Drop Zone) -->
+          <div ref="sequenceContainerRef">
+            <transition-group 
+              name="list"
+              tag="div"
+              class="flex flex-wrap gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-xl min-h-[5rem] items-center relative transition-all"
+            >
+              <div v-if="customSequenceArray.length === 0" key="empty-sequence-msg" class="text-zinc-500 text-sm w-full text-center absolute left-0 pointer-events-none">請拖曳下方音程加入</div>
+              <div 
+                v-for="(tokenObj, index) in customSequenceArray"
+                :key="tokenObj.id"
+                data-sequence-card
+                @pointerdown="startDrag($event, index, 'sequence')"
+                class="px-4 py-2 font-mono font-black cursor-grab active:cursor-grabbing transition-all shadow-sm relative flex items-center justify-center rounded-lg border touch-none select-none bg-emerald-500/20 text-emerald-300 border-emerald-500/50"
+                :class="[
+                  activeSequenceGap === index ? 'ml-6 before:content-[\'\'] before:absolute before:-left-5 before:top-1/2 before:-translate-y-1/2 before:h-8 before:w-1.5 before:bg-emerald-400 before:rounded-full' : '',
+                  index === customSequenceArray.length - 1 && activeSequenceGap === customSequenceArray.length ? 'mr-6 after:content-[\'\'] after:absolute after:-right-5 after:top-1/2 after:-translate-y-1/2 after:h-8 after:w-1.5 after:bg-emerald-400 after:rounded-full' : '',
+                  dragState && dragState.source === 'sequence' && dragState.item === index && dragState.dragging ? 'prog-card-hidden' : '',
+                  dragState && dragState.dragging ? '' : 'hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50'
+                ]"
+                title="點擊移除，拖放到縫隙中插入"
+              >
+                {{ tokenObj.value }}
+              </div>
+            </transition-group>
+          </div>
+
+          <!-- 可用音程庫 -->
+          <div class="space-y-3">
+            <div v-for="group in sequenceLibrary" :key="group.label" class="space-y-1.5">
+              <div class="text-[0.7rem] font-bold text-zinc-500 tracking-wide uppercase">{{ group.label }}</div>
+              <div class="flex flex-wrap gap-2">
+                <div
+                  v-for="token in group.tokens"
+                  :key="'seq-lib-' + token"
+                  @pointerdown="startDrag($event, token, 'sequenceLibrary')"
+                  class="px-4 py-2 bg-zinc-900 text-zinc-300 border border-zinc-700 rounded-lg font-mono font-bold cursor-grab active:cursor-grabbing hover:bg-zinc-700 hover:text-white transition-colors touch-none select-none"
+                  title="點擊或拖曳加入音序"
+                >
+                  {{ token }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p class="text-xs text-zinc-500 text-center leading-relaxed">
+            💡 支援 <span class="text-zinc-300">1-7</span> 代表順階度數，前綴 <span class="text-zinc-300">L</span> 代表低音，前綴 <span class="text-zinc-300">H</span> 代表高音。後台會依據當前和弦自動切換調式（Mode）防跑調。
           </p>
         </div>
       </div>
@@ -840,8 +1056,8 @@ const exitTraining = () => {
         </p>
       </div>
 
-      <!-- 和弦時間下一列：左側為退出特訓 (較小、不常用)，右側為目前把位。 -->
-      <div class="train-controls flex items-center justify-between gap-2 w-full px-1">
+      <!-- 和弦時間下一列：退出特訓、音程顯示基準、目前把位。 -->
+      <div class="train-controls flex flex-wrap items-center justify-between gap-2 w-full px-1">
         <div class="flex items-center gap-2">
           <button
             @click="exitTraining"
@@ -850,6 +1066,29 @@ const exitTraining = () => {
             ✕ 退出特訓
           </button>
         </div>
+
+        <div class="flex items-center gap-1 bg-zinc-950/80 border border-zinc-800 rounded-xl p-1">
+          <span class="px-2 text-[0.7rem] font-bold text-zinc-500 whitespace-nowrap">音程顯示</span>
+          <button
+            @click="intervalDisplayMode = 'chord'"
+            class="px-3 py-1.5 rounded-lg text-xs font-black transition-all"
+            :class="intervalDisplayMode === 'chord'
+              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/70'
+              : 'text-zinc-500 border border-transparent hover:text-zinc-300'"
+          >
+            從 Chord
+          </button>
+          <button
+            @click="intervalDisplayMode = 'key'"
+            class="px-3 py-1.5 rounded-lg text-xs font-black transition-all"
+            :class="intervalDisplayMode === 'key'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-400/70'
+              : 'text-zinc-500 border border-transparent hover:text-zinc-300'"
+          >
+            從 Key
+          </button>
+        </div>
+
         <div class="flex items-center text-zinc-400 font-bold text-xs sm:text-sm whitespace-nowrap">
           目前把位:<span class="text-emerald-400 ml-1.5 text-base sm:text-lg">{{ currentFormName }} 型</span>
         </div>
@@ -865,6 +1104,7 @@ const exitTraining = () => {
           :currentPhase="currentPhase"
           :activeNoteTarget="activeNoteTarget"
           :prepChordVoicingNotes="prepChordVoicingNotes"
+          :intervalDisplayMode="intervalDisplayMode"
         />
       </div>
 

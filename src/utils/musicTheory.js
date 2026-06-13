@@ -15,7 +15,7 @@ export const STRING_OPENS = [4, 11, 7, 2, 9, 4]; // 1弦到6弦空弦音高
 //
 // 想新增字卡時，只要在對應的分類區塊加一筆即可，三大引擎 (指板/音訊/爬音) 會自動支援。
 export const CHORD_MODES = {
-  // ===== 順階三和弦 (大小調基礎) =====
+  // ===== 順階三和弦（大調基礎） =====
   'I':    { offset: 0,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj', modeName: 'Ionian' },
   'ii':   { offset: 2,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm',   modeName: 'Dorian' },
   'iii':  { offset: 4,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Phrygian' },
@@ -24,7 +24,7 @@ export const CHORD_MODES = {
   'vi':   { offset: 9,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Aeolian' },
   'vii°': { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'dim', modeName: 'Locrian' },
 
-  // ===== 順階七和弦 (七度色彩，搭配三和弦使用) =====
+  // ===== 順階七和弦（大調基礎） =====
   'IM7':     { offset: 0,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj7', modeName: 'Ionian' },
   'iim7':    { offset: 2,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm7',   modeName: 'Dorian' },
   'iiim7':   { offset: 4,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Phrygian' },
@@ -33,11 +33,51 @@ export const CHORD_MODES = {
   'vim7':    { offset: 9,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Aeolian' },
   'viim7b5': { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian' },
 
-  // ===== 調外 / 借用和弦 (Modal Interchange，根音在調外) =====
-  'bIII': { offset: 3,  mode: [0, 2, 4, 5, 7, 9, 11],    family: 'major', label: 'maj',  modeName: 'Ionian (♭III)' },
-  'bVI':  { offset: 8,  mode: [0, 2, 4, 5, 7, 9, 11],    family: 'major', label: 'maj',  modeName: 'Ionian (♭VI)' },
-  'bVII': { offset: 10, mode: [0, 2, 4, 5, 7, 9, 10],    family: 'dom',   label: '7',    modeName: 'Mixolydian (♭VII)' },
-  'vii°7':{ offset: 11, mode: [0, 2, 3, 5, 6, 8, 9, 11], family: 'dim',   label: 'dim7', modeName: 'Diminished' }
+  // ===== 同主調三和弦（以 C 大調為例，就是 C 小調自然音階的三和弦） =====
+  'i':    { offset: 0,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Aeolian (同主調 i)' },
+  'ii°':  { offset: 2,  mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'dim', modeName: 'Locrian (同主調 ii°)' },
+  'bIII': { offset: 3,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj', modeName: 'Ionian (同主調 ♭III)' },
+  'iv':   { offset: 5,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm',   modeName: 'Dorian (同主調 iv)' },
+  'v':    { offset: 7,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm',   modeName: 'Phrygian (同主調 v)' },
+  'bVI':  { offset: 8,  mode: [0, 2, 4, 6, 7, 9, 11], family: 'major', label: 'maj', modeName: 'Lydian (同主調 ♭VI)' },
+  'bVII': { offset: 10, mode: [0, 2, 4, 5, 7, 9, 10], family: 'major', label: 'maj', modeName: 'Mixolydian (同主調 ♭VII)' },
+
+  // ===== 同主調七和弦（同主調自然小調的四和音） =====
+  'im7':     { offset: 0,  mode: [0, 2, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Aeolian (同主調 im7)' },
+  'iim7b5':  { offset: 2,  mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian (同主調 iim7♭5)' },
+  'bIIIM7':  { offset: 3,  mode: [0, 2, 4, 5, 7, 9, 11], family: 'major', label: 'maj7', modeName: 'Ionian (同主調 ♭IIIM7)' },
+  'ivm7':    { offset: 5,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm7',   modeName: 'Dorian (同主調 ivm7)' },
+  'vm7':     { offset: 7,  mode: [0, 1, 3, 5, 7, 8, 10], family: 'minor', label: 'm7',   modeName: 'Phrygian (同主調 vm7)' },
+  'bVIM7':   { offset: 8,  mode: [0, 2, 4, 6, 7, 9, 11], family: 'major', label: 'maj7', modeName: 'Lydian (同主調 ♭VIM7)' },
+  'bVII7':   { offset: 10, mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom',   label: '7',    modeName: 'Mixolydian (同主調 ♭VII7)' },
+
+  // ===== 副屬七和弦（Secondary Dominant） =====
+  // 以 C 大調為例：V7/ii = A7，V7/V = D7。
+  'V7/ii':  { offset: 9,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (副屬七 V7/ii)' },
+  'V7/iii': { offset: 11, mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (副屬七 V7/iii)' },
+  'V7/IV':  { offset: 0,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (副屬七 V7/IV)' },
+  'V7/V':   { offset: 2,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (副屬七 V7/V)' },
+  'V7/vi':  { offset: 4,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (副屬七 V7/vi)' },
+
+  // ===== 關聯 II（Related II） =====
+  // 目標是小調系和弦時，關聯 II 使用半減七 m7♭5。
+  // 例如 C 大調：IIm7b5/ii = Em7♭5 -> V7/ii = A7 -> ii = Dm。
+  // 目標是大調系和弦時，關聯 II 使用一般 m7。
+  // 例如 C 大調：IIm7/V = Am7 -> V7/V = D7 -> V = G。
+  'IIm7b5/ii':  { offset: 4,  mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian (關聯 IIm7♭5/ii)' },
+  'IIm7b5/iii': { offset: 6,  mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian (關聯 IIm7♭5/iii)' },
+  'IIm7/IV':    { offset: 7,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm7',   modeName: 'Dorian (關聯 IIm7/IV)' },
+  'IIm7/V':     { offset: 9,  mode: [0, 2, 3, 5, 7, 9, 10], family: 'minor', label: 'm7',   modeName: 'Dorian (關聯 IIm7/V)' },
+  'IIm7b5/vi':  { offset: 11, mode: [0, 1, 3, 5, 6, 8, 10], family: 'dim',   label: 'm7♭5', modeName: 'Locrian (關聯 IIm7♭5/vi)' },
+
+  // ===== 裏和弦（SubV7 / Tritone Substitute） =====
+  // 這裡用 Mixolydian 處理，讓既有 CAGED 音階資料可以直接運作。
+  'SubV7/I':   { offset: 1,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/I)' },
+  'SubV7/ii':  { offset: 3,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/ii)' },
+  'SubV7/iii': { offset: 5,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/iii)' },
+  'SubV7/IV':  { offset: 6,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/IV)' },
+  'SubV7/V':   { offset: 8,  mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/V)' },
+  'SubV7/vi':  { offset: 10, mode: [0, 2, 4, 5, 7, 9, 10], family: 'dom', label: '7', modeName: 'Mixolydian (裏和弦 SubV7/vi)' }
 };
 
 // 音程名稱與半音數的對照表。
@@ -580,19 +620,29 @@ export function getAbsoluteNoteFromToken(keyRoot, chordDegreeStr, token) {
   if (!chordConfig) return null;
 
   const chordRootAbs = (keyRoot + chordConfig.offset) % 12;
-  
-  let isLow = token.startsWith('L');
-  let degreeNum = parseInt(isLow ? token.substring(1) : token, 10);
-  
-  // 將度數 1-7 映射到調式陣列索引 0-6
-  let modeIndex = (degreeNum - 1) % 7;
-  let semitoneOffset = chordConfig.mode[modeIndex];
-  
-  if (isLow) {
-    semitoneOffset -= 12; // 低音降八度
-  }
-  
-  return (chordRootAbs + semitoneOffset + 24) % 12;
+  const rawToken = String(token || '').trim();
+  const prefix = rawToken.charAt(0).toUpperCase();
+
+  // L = 低八度、H = 高八度、無前綴 = 中央音域。
+  const hasOctavePrefix = prefix === 'L' || prefix === 'H';
+  const degreeText = hasOctavePrefix ? rawToken.slice(1) : rawToken;
+  const degreeNum = parseInt(degreeText, 10);
+
+  if (!Number.isFinite(degreeNum) || degreeNum < 1) return null;
+
+  // 將度數 1-7 映射到調式陣列索引 0-6。
+  // 超過 7 時仍保留循環映射，方便日後擴充。
+  const modeIndex = (degreeNum - 1) % 7;
+  const semitoneOffset = chordConfig.mode[modeIndex];
+
+  if (semitoneOffset === undefined) return null;
+
+  // 先把音名固定在 0-11，再依 L/H 套用八度位移。
+  // AudioEngine 會用這個數值直接換算頻率，所以 H 會真的變高八度。
+  const pitchClass = (chordRootAbs + semitoneOffset + 120) % 12;
+  const octaveOffset = prefix === 'L' ? -12 : prefix === 'H' ? 12 : 0;
+
+  return pitchClass + octaveOffset;
 }
 
 /**

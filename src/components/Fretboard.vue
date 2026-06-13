@@ -21,6 +21,11 @@ const props = defineProps({
   currentPhase: String,
   activeNoteTarget: Object,
   prepChordVoicingNotes: { type: Array, default: () => [] },
+
+  // 指板音程顯示基準：
+  // chord = 從目前和弦根音看音程。
+  // key = 從目前 Key 根音看音程。
+  intervalDisplayMode: { type: String, default: 'chord' }
 });
 
 const totalFrets = 15;
@@ -72,7 +77,12 @@ const fretboardGrid = computed(() => {
     return fretsLayout.value.map(fret => {
       const note = calculateNote(stringIndex, fret, props.keyRoot);
       let intervalFromChord = 0;
+      let intervalFromKeyRoot = 0;
       let isThisNodeInMode = false;
+
+      if (note) {
+        intervalFromKeyRoot = (note.absoluteNote - props.keyRoot + 12) % 12;
+      }
 
       if (note && rootAbs !== null) {
         intervalFromChord = (note.absoluteNote - rootAbs + 12) % 12;
@@ -84,15 +94,22 @@ const fretboardGrid = computed(() => {
         fret,
         note,
         intervalFromChord,
+        intervalFromKeyRoot,
         isThisNodeInMode
       };
     });
   });
 });
 
+const normalizeIntervalLabel = (label) => {
+  return String(label || '')
+    .replace(/♭/g, 'b')
+    .replace(/♯/g, '#');
+};
+
 // 🎨 訓練期閃爍用音程色彩
 const getIntervalColorClass = (interval, intervalLabel = null) => {
-  const label = intervalLabel || '';
+  const label = normalizeIntervalLabel(intervalLabel);
 
   if (interval === 0 || label === '1') {
     return 'fretboard-note--root-active';
@@ -116,12 +133,55 @@ const formatIntervalLabel = (label) => {
     .replace(/#/g, '♯');
 };
 
-const getDisplayIntervalLabel = (cell) => {
-  if (isActiveNote(cell) && props.activeNoteTarget?.intervalLabel) {
-    return formatIntervalLabel(props.activeNoteTarget.intervalLabel);
+const isKeyIntervalMode = computed(() => props.intervalDisplayMode === 'key');
+
+const getDisplayIntervalInfo = (cell) => {
+  // 從 Key 看音程時，直接以目前 keyRoot 作為 1。
+  // 這裡使用 I 的拼法作為大調 Key 內的基準顯示。
+  if (isKeyIntervalMode.value) {
+    const label = getIntervalName(cell.intervalFromKeyRoot, 'I');
+    return {
+      interval: cell.intervalFromKeyRoot,
+      label
+    };
   }
 
-  return getIntervalName(cell.intervalFromChord, props.currentChord);
+  // 從 Chord 看音程時，訓練音優先沿用 CAGED 資料內的語義音程。
+  // 這可以保留 #4 / b5、6 / b6、7 / b7 這類調式差異。
+  if (isActiveNote(cell) && props.activeNoteTarget?.intervalLabel) {
+    return {
+      interval: cell.intervalFromChord,
+      label: props.activeNoteTarget.intervalLabel
+    };
+  }
+
+  return {
+    interval: cell.intervalFromChord,
+    label: getIntervalName(cell.intervalFromChord, props.currentChord)
+  };
+};
+
+const getDisplayIntervalLabel = (cell) => {
+  return formatIntervalLabel(getDisplayIntervalInfo(cell).label);
+};
+
+const getDisplayIntervalColorClass = (cell) => {
+  const info = getDisplayIntervalInfo(cell);
+  return getIntervalColorClass(info.interval, info.label);
+};
+
+const getPrepGhostIntervalLabel = (cell) => {
+  const ghostNote = getPrepGhostNote(cell);
+  if (!ghostNote) return '';
+
+  // 從 Key 看時，Prep 的灰色和弦音也改成 Key 基準。
+  if (isKeyIntervalMode.value) {
+    return formatIntervalLabel(getIntervalName(cell.intervalFromKeyRoot, 'I'));
+  }
+
+  // 從 Chord 看時，保留 voicing 資料裡的和弦功能音。
+  return formatIntervalLabel(ghostNote.interval) ||
+    getIntervalName(ghostNote.intervalFromChordRoot, props.currentChord);
 };
 
 // 判斷某個音是否為當前正在閃爍的 active note
@@ -344,7 +404,7 @@ onUnmounted(() => {
                     class="fretboard-note fretboard-note--active flex items-center justify-center"
                     :class="[
                       cell.note.isKeyRoot ? 'fretboard-note--square' : 'fretboard-note--circle',
-                      getIntervalColorClass(cell.intervalFromChord),
+                      getDisplayIntervalColorClass(cell),
                       props.activeNoteTarget?.type === 'custom' ? 'fretboard-note--custom-ring' : 'fretboard-note--bounce'
                     ]"
                   >
@@ -368,7 +428,7 @@ onUnmounted(() => {
                     :class="cell.note.isKeyRoot ? 'fretboard-note--square' : 'fretboard-note--circle'"
                   >
                     <span class="text-[0.65rem] font-black leading-none tracking-tighter">
-                      {{ formatIntervalLabel(getPrepGhostNote(cell).interval) || getIntervalName(getPrepGhostNote(cell).intervalFromChordRoot, props.currentChord) }}
+                      {{ getPrepGhostIntervalLabel(cell) }}
                     </span>
                   </div>
 
