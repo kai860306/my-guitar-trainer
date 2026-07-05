@@ -34,7 +34,7 @@
    * **底層資料模型**：每張和弦字卡以統一結構描述（`offset` 根音半音距離、`mode` 調式音階、`family` 大小調 / 屬七 / 減和弦體系、`label` 和弦性質、`modeName` 調式名稱）。新增字卡主要需於 `CHORD_MODES` 增加資料，指板、音訊、爬音邏輯即可共用。
 5. **BPM 調整欄**：提供 `+` / `-` 按鈕，每次 ±5 BPM；可調範圍 40–240 BPM，預設 85 BPM。讀取保存設定時也會將 BPM 限制在此範圍。
 6. **三驅動音序模式**（三選一的「音程特訓模式演算法」引擎：`stage` 階梯爬升 / `custom` 自訂音序器 / `triad` 三和弦琶音）：
-   * **階梯爬升解鎖（`stage`）**：可切換兩種獨立的「音程特訓模式演算法」，各自有自己的 Stage 數與解鎖曲線；`CAGED_SCALES` 內建的 7 種調式 × 5 種 CAGED 型（共 35 個靜態音階型）的 `path` 決定實際播放順序，Stage 只負責依音程過濾。設定保存時會各自記住目前選用的模式與 Stage。
+   * **階梯爬升解鎖（`stage`）**：可切換兩種獨立的「音程特訓模式演算法」，各自有自己的 Stage 數與解鎖曲線；`CAGED_SCALES` 由 7 種調式 × 5 種 CAGED 型（共 35 個音階型）以演算法生成，其 `path` 決定實際播放順序，Stage 只負責依音程過濾。設定保存時會各自記住目前選用的模式與 Stage。
      * **和弦基礎模式（`chord`，預設，Stage 1-5）**：Triad → 7th → 9th → 11th → 13th，逐階為三和弦疊加和弦延伸色彩。
        * **Major / Dominant 體系**：
          * Stage 1（三和弦）：`1, 3, 5`
@@ -146,10 +146,12 @@
   * token `6`、`7` 會映射到該 mode 的 `b6`、`b7`；對應音：`E → F → A → B → G → A`
 
 ### 4.3 CAGED scale 與 diminished 的現況
-* 預設訓練使用靜態 CAGED scale 資料，不在執行時自動生成完整音階指法。每個 mode / form 的 notes 與 path 都可在資料中手動調整。
-* 7 種 church modes × 5 種 CAGED forms 共 35 個 shape 會在開發模式中檢查完整性。
+* CAGED scale 資料由演算法生成：手寫的只有各 CAGED 型的幾何（`CAGED_FORM_GEOMETRY`：`rootString` 與各弦的 offset 視窗），`buildCagedScaleShape()` 依「調式 × 幾何」推算每個音的弦 / 品格 / 音程，並生成 `path`（根音 → 最高音 → 最低音 → 回根音）。
+* 生成時強制「同音異弦零」：同一個絕對音只會落在一條弦上（三全音 `#4` 靠細弦、`b5` 靠粗弦）。需要手動指定某型的練習順序時，可在 `PATH_OVERRIDES` 覆寫該型的 `path`。
+* 7 種 church modes × 5 種 CAGED forms 共 35 個 shape 會在開發模式中檢查完整性（含音高與音程一致、同音異弦零的檢算）。
+* **7th 和弦 voicing 每個 CAGED 型只有單一按法**：`maj7` / `m7` / `7`（dom7）/ `m7♭5` 依指板圖，每個 form（C/A/G/E/D）固定一個 voicing，已移除 `omit5` / `shell` 等替代按法。因此 `resolveCagedChordVoicing()` 在未指定 option 時回傳的就是該型唯一的 voicing，chord 與 scale 使用同一個 form，不會再出現「G 型 scale 卻顯示 E 型和弦按法」的情形。三和弦 `maj` / `min` / `dim` 與 `dim7` 維持原狀。
 * 目前和弦庫沒有提供 `vii°7`（減七和弦）字卡，`vii°` 只以減三和弦（`dim`）形式存在。
-* `CHORD_LABEL_TO_QUALITY` 與 `CAGED_CHORD_VOICINGS` 已預留 `dim7`（沿用 diminished triad 按法），供未來新增減七和弦字卡時直接使用，目前尚未有任何和弦使用此 label。
+* `dim`（減三和弦，R/♭3/♭5）與 `dim7`（減七和弦，R/♭3/♭5/6＝♭♭7）各自擁有 5 個 CAGED 型的單一按法；`dim7` 已不再沿用 `dim` 的按法（先前的 alias 已解除）。`dim7` 的第 4 音因音程表無 `♭♭7`，以相同音高（9 半音）的 `6` 表示。目前和弦庫沒有 `dim7` 字卡（`vii°` 仍為 `dim`），故 `dim7` 按法尚未被任何字卡使用，屬預先備妥。
 
 ---
 
@@ -162,9 +164,12 @@
 * 指板把位框修正為整組和弦進行的統一 min–max 邊界，不是每個和弦各自的邊界。
 * CAGED cycle 修正為依可用把位中心點排序後向高把位推進，不是固定 `C → A → G → E → D` 字面順序。
 * Stage 規則補上 `dom` 視為 major、`dim` 專用 Stage、Stage 4 的實際音程清單與調式過濾邏輯。
-* 補充 `localStorage` 設定保存、靜態 35 個 CAGED scale shape、資料定義式 CAGED voicing、訓練畫面無暫停 / 恢復按鈕等實作現況。
+* 補充 `localStorage` 設定保存、演算法生成的 35 個 CAGED scale shape、資料定義式 CAGED voicing、訓練畫面無暫停 / 恢復按鈕等實作現況。
 * 和弦庫由三大類修正為七大類，補上同主調三和弦 / 同主調七和弦 / 副屬七和弦 / 關聯 II / 裏和弦（SubV7）。
 * 階梯解鎖規則修正為 `chord`（Stage 1-5：Triad → 7th / 9th / 11th / 13th）與 `scale`（Stage 1-3：Triad → Pentatonic → Mode Scale）雙模式，取代原本單一 Stage 1-5 描述；Stage 上限依模式各自為 5 與 3。
 * 補充訓練畫面「音程顯示基準」（從 Chord / 從 Key）切換功能，並列入 `localStorage` 保存項目。
 * 移除 `vii°7` 已實作的錯誤描述；目前和弦庫沒有此字卡，`dim7` 僅為預留的 label / voicing，尚未被任何和弦使用。
 * 新增第三種音序引擎「三和弦琶音」（`triad`）：在選定的連續三弦組（`1-3` / `2-4` / `3-5` / `4-6`）上，以最小琴格移動（Voice Leading）自動選出轉回形彈奏和弦進行。音序引擎切換由原本的布林 `isCustomSequenceMode` 改為三選一的 `trainingInputMode`（`stage` / `custom` / `triad`），並保存 `selectedTriadStringSet`，同時提供舊設定的後方相容遷移。
+* CAGED scale shape 由手寫改為演算法生成（僅手寫各 form 幾何 `CAGED_FORM_GEOMETRY`），並保證同音異弦為零。
+* 7th 和弦（`maj7` / `m7` / `7` / `m7♭5`）的 CAGED voicing 統一為「每個 form 單一按法」（依指板圖），移除 `omit5` / `shell` 等替代 voicing；同時修正 `maj7` / `m7` / `m7♭5` 的 G 型被誤寫成 E 型指型的資料錯誤。
+* `dim` / `dim7` 也改為每個 CAGED 型單一按法（`dim7` 依指板圖、`dim` 由 `dim7` 去掉 6th 推得），並解除 `dim7 = dim` 的 alias 使兩者成為獨立資料。

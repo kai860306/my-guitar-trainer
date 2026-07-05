@@ -111,7 +111,7 @@ export const CHORD_LABEL_TO_QUALITY = {
   'dim7': 'dim7'
 };
 
-// 和弦實戰フォーム定義。
+// 和弦實戰 form 定義。
 // string 使用吉他手習慣的弦號：1=最細弦，6=最粗弦。
 // offset 是「目前 CAGED form 的 rootFret」加減幾格；因此可直接轉調。
 // interval 是該音從和弦根音看的功能音。若要增加按法，只要在對應 quality/form 陣列追加一筆。
@@ -222,27 +222,21 @@ export const CAGED_CHORD_VOICINGS = {
     ]
   },
 
+  // 7th 和弦：每個 CAGED 型固定一個按法（依使用者提供的指板圖）。
+  // 已移除省略 / shell 等替代 voicing；每個 form 只有單一 voicing。
   maj7: {
     C: [
-      { id: 'maj7-C-full', name: 'C form maj7 含 5 度', tags: ['full'], strings: [
+      { id: 'maj7-C', name: 'maj7 C 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: -1, interval: '3' },
         { string: 3, offset: -3, interval: '5' },
         { string: 2, offset: -3, interval: '7' },
         { string: 1, offset: -3, interval: '3' }
-      ]},
-      { id: 'maj7-C-omit5', name: 'C form maj7 省略 5 度', tags: ['omit5', 'compact'], strings: [
-        { string: 6, mute: true },
-        { string: 5, offset: 0, interval: '1' },
-        { string: 4, offset: -1, interval: '3' },
-        { string: 3, mute: true },
-        { string: 2, offset: -3, interval: '7' },
-        { string: 1, offset: -3, interval: '3' }
       ]}
     ],
     A: [
-      { id: 'maj7-A-full', name: 'A form maj7 含 5 度', tags: ['full'], strings: [
+      { id: 'maj7-A', name: 'maj7 A 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 2, interval: '5' },
@@ -252,35 +246,27 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     G: [
-      { id: 'maj7-G-compact', name: 'G form maj7 精簡按法', tags: ['compact'], strings: [
-        { string: 6, offset: 0, interval: '1' },
+      { id: 'maj7-G', name: 'maj7 G 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
         { string: 5, mute: true },
-        { string: 4, offset: 1, interval: '7' },
-        { string: 3, offset: 1, interval: '3' },
-        { string: 2, offset: 0, interval: '5' },
+        { string: 4, offset: -3, interval: '5' },
+        { string: 3, offset: -3, interval: '1' },
+        { string: 2, offset: -3, interval: '3' },
         { string: 1, offset: -1, interval: '7' }
       ]}
     ],
     E: [
-      { id: 'maj7-E-full', name: 'E form maj7 含 5 度', tags: ['full'], strings: [
-        { string: 6, offset: 0, interval: '1' },
-        { string: 5, offset: 2, interval: '5' },
-        { string: 4, offset: 1, interval: '7' },
-        { string: 3, offset: 1, interval: '3' },
-        { string: 2, offset: 0, interval: '5' },
-        { string: 1, offset: 0, interval: '1' }
-      ]},
-      { id: 'maj7-E-omit5', name: 'E form maj7 省略 5 度', tags: ['omit5', 'compact'], strings: [
+      { id: 'maj7-E', name: 'maj7 E 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
         { string: 5, mute: true },
         { string: 4, offset: 1, interval: '7' },
         { string: 3, offset: 1, interval: '3' },
-        { string: 2, mute: true },
-        { string: 1, offset: 0, interval: '1' }
+        { string: 2, offset: 0, interval: '5' },
+        { string: 1, mute: true }
       ]}
     ],
     D: [
-      { id: 'maj7-D-full', name: 'D form maj7 含 5 度', tags: ['full'], strings: [
+      { id: 'maj7-D', name: 'maj7 D 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: '1' },
@@ -293,7 +279,7 @@ export const CAGED_CHORD_VOICINGS = {
 
   dom7: {
     C: [
-      { id: 'dom7-C-full', name: 'C form 7 含 5 度', tags: ['full'], strings: [
+      { id: 'dom7-C', name: '7 C 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: -1, interval: '3' },
@@ -303,7 +289,7 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     A: [
-      { id: 'dom7-A-full', name: 'A form 7 含 5 度', tags: ['full'], strings: [
+      { id: 'dom7-A', name: '7 A 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 2, interval: '5' },
@@ -313,9 +299,9 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     G: [
-      { id: 'dom7-G-full', name: 'G form 7 含 5 度', tags: ['full'], strings: [
-        { string: 6, offset: 0, interval: '1' },
-        { string: 5, offset: -1, interval: '3' },
+      { id: 'dom7-G', name: '7 G 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
+        { string: 5, mute: true },
         { string: 4, offset: -3, interval: '5' },
         { string: 3, offset: -3, interval: '1' },
         { string: 2, offset: -3, interval: '3' },
@@ -323,25 +309,17 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     E: [
-      { id: 'dom7-E-full', name: 'E form 7 含 5 度', tags: ['full'], strings: [
+      { id: 'dom7-E', name: '7 E 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
         { string: 5, offset: 2, interval: '5' },
         { string: 4, offset: 0, interval: 'b7' },
         { string: 3, offset: 1, interval: '3' },
         { string: 2, offset: 0, interval: '5' },
         { string: 1, offset: 0, interval: '1' }
-      ]},
-      { id: 'dom7-E-shell', name: 'E form 7 省略 5 度 shell', tags: ['omit5', 'shell'], strings: [
-        { string: 6, offset: 0, interval: '1' },
-        { string: 5, mute: true },
-        { string: 4, offset: 0, interval: 'b7' },
-        { string: 3, offset: 1, interval: '3' },
-        { string: 2, mute: true },
-        { string: 1, mute: true }
       ]}
     ],
     D: [
-      { id: 'dom7-D-full', name: 'D form 7 含 5 度', tags: ['full'], strings: [
+      { id: 'dom7-D', name: '7 D 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: '1' },
@@ -354,17 +332,17 @@ export const CAGED_CHORD_VOICINGS = {
 
   m7: {
     C: [
-      { id: 'm7-C-full', name: 'C form m7 含 5 度', tags: ['full'], strings: [
+      { id: 'm7-C', name: 'm7 C 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: -2, interval: 'b3' },
         { string: 3, offset: 0, interval: 'b7' },
-        { string: 2, offset: -2, interval: '1' },
+        { string: 2, offset: 1, interval: 'b3' },
         { string: 1, mute: true }
       ]}
     ],
     A: [
-      { id: 'm7-A-full', name: 'A form m7 含 5 度', tags: ['full'], strings: [
+      { id: 'm7-A', name: 'm7 A 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 2, interval: '5' },
@@ -374,35 +352,27 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     G: [
-      { id: 'm7-G-full', name: 'G form m7 含 5 度', tags: ['full'], strings: [
-        { string: 6, offset: 0, interval: '1' },
+      { id: 'm7-G', name: 'm7 G 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
         { string: 5, mute: true },
-        { string: 4, offset: 0, interval: 'b7' },
-        { string: 3, offset: 0, interval: 'b3' },
-        { string: 2, offset: 0, interval: '5' },
-        { string: 1, offset: 0, interval: '1' }
+        { string: 4, offset: -3, interval: '5' },
+        { string: 3, offset: -3, interval: '1' },
+        { string: 2, offset: -4, interval: 'b3' },
+        { string: 1, offset: -2, interval: 'b7' }
       ]}
     ],
     E: [
-      { id: 'm7-E-full', name: 'E form m7 含 5 度', tags: ['full'], strings: [
+      { id: 'm7-E', name: 'm7 E 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
         { string: 5, offset: 2, interval: '5' },
         { string: 4, offset: 0, interval: 'b7' },
         { string: 3, offset: 0, interval: 'b3' },
         { string: 2, offset: 0, interval: '5' },
         { string: 1, offset: 0, interval: '1' }
-      ]},
-      { id: 'm7-E-shell', name: 'E form m7 省略 5 度 shell', tags: ['omit5', 'shell'], strings: [
-        { string: 6, offset: 0, interval: '1' },
-        { string: 5, mute: true },
-        { string: 4, offset: 0, interval: 'b7' },
-        { string: 3, offset: 0, interval: 'b3' },
-        { string: 2, mute: true },
-        { string: 1, mute: true }
       ]}
     ],
     D: [
-      { id: 'm7-D-full', name: 'D form m7 含 5 度', tags: ['full'], strings: [
+      { id: 'm7-D', name: 'm7 D 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: '1' },
@@ -415,17 +385,17 @@ export const CAGED_CHORD_VOICINGS = {
 
   m7b5: {
     C: [
-      { id: 'm7b5-C-full', name: 'C form m7b5 含 b5', tags: ['full'], strings: [
+      { id: 'm7b5-C', name: 'm7♭5 C 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
-        { string: 4, offset: 1, interval: 'b5' },
+        { string: 4, offset: -2, interval: 'b3' },
         { string: 3, offset: 0, interval: 'b7' },
-        { string: 2, offset: 1, interval: 'b3' },
-        { string: 1, mute: true }
+        { string: 2, offset: -2, interval: '1' },
+        { string: 1, offset: -1, interval: 'b5' }
       ]}
     ],
     A: [
-      { id: 'm7b5-A-full', name: 'A form m7b5 含 b5', tags: ['full'], strings: [
+      { id: 'm7b5-A', name: 'm7♭5 A 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 1, interval: 'b5' },
@@ -435,7 +405,17 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     G: [
-      { id: 'm7b5-G-compact', name: 'G form m7b5 精簡按法', tags: ['compact'], strings: [
+      { id: 'm7b5-G', name: 'm7♭5 G 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
+        { string: 5, mute: true },
+        { string: 4, offset: -4, interval: 'b5' },
+        { string: 3, offset: -3, interval: '1' },
+        { string: 2, offset: -4, interval: 'b3' },
+        { string: 1, offset: -2, interval: 'b7' }
+      ]}
+    ],
+    E: [
+      { id: 'm7b5-E', name: 'm7♭5 E 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: 'b7' },
@@ -444,18 +424,8 @@ export const CAGED_CHORD_VOICINGS = {
         { string: 1, mute: true }
       ]}
     ],
-    E: [
-      { id: 'm7b5-E-compact', name: 'E form m7b5 精簡按法', tags: ['compact'], strings: [
-        { string: 6, offset: 0, interval: '1' },
-        { string: 5, offset: 1, interval: 'b5' },
-        { string: 4, offset: 0, interval: 'b7' },
-        { string: 3, offset: 0, interval: 'b3' },
-        { string: 2, mute: true },
-        { string: 1, mute: true }
-      ]}
-    ],
     D: [
-      { id: 'm7b5-D-full', name: 'D form m7b5 含 b5', tags: ['full'], strings: [
+      { id: 'm7b5-D', name: 'm7♭5 D 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: '1' },
@@ -466,19 +436,20 @@ export const CAGED_CHORD_VOICINGS = {
     ]
   },
 
+  // dim 三和弦（R, b3, b5）：每個 CAGED 型單一按法，依 dim7 指板圖去掉 6th 推得。
   dim: {
     C: [
-      { id: 'dim-C-triad', name: 'C form dim 三和弦', tags: ['compact'], strings: [
+      { id: 'dim-C', name: 'dim C 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 1, interval: 'b5' },
         { string: 3, mute: true },
         { string: 2, offset: 1, interval: 'b3' },
-        { string: 1, mute: true }
+        { string: 1, offset: -1, interval: 'b5' }
       ]}
     ],
     A: [
-      { id: 'dim-A-triad', name: 'A form dim 三和弦', tags: ['compact'], strings: [
+      { id: 'dim-A', name: 'dim A 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, offset: 0, interval: '1' },
         { string: 4, offset: 1, interval: 'b5' },
@@ -488,40 +459,92 @@ export const CAGED_CHORD_VOICINGS = {
       ]}
     ],
     G: [
-      { id: 'dim-G-triad', name: 'G form dim 三和弦', tags: ['compact'], strings: [
+      { id: 'dim-G', name: 'dim G 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
-        { string: 5, offset: -2, interval: 'b3' },
+        { string: 5, mute: true },
         { string: 4, mute: true },
-        { string: 3, mute: true },
+        { string: 3, offset: 0, interval: 'b3' },
         { string: 2, offset: -1, interval: 'b5' },
         { string: 1, offset: 0, interval: '1' }
       ]}
     ],
     E: [
-      { id: 'dim-E-triad', name: 'E form dim 三和弦', tags: ['compact'], strings: [
+      { id: 'dim-E', name: 'dim E 型', tags: ['full'], strings: [
         { string: 6, offset: 0, interval: '1' },
         { string: 5, offset: 1, interval: 'b5' },
-        { string: 4, mute: true },
+        { string: 4, offset: 2, interval: '1' },
         { string: 3, offset: 0, interval: 'b3' },
         { string: 2, mute: true },
-        { string: 1, offset: 0, interval: '1' }
+        { string: 1, mute: true }
       ]}
     ],
     D: [
-      { id: 'dim-D-triad', name: 'D form dim 三和弦', tags: ['compact'], strings: [
+      { id: 'dim-D', name: 'dim D 型', tags: ['full'], strings: [
         { string: 6, mute: true },
         { string: 5, mute: true },
         { string: 4, offset: 0, interval: '1' },
         { string: 3, offset: 1, interval: 'b5' },
-        { string: 2, mute: true },
+        { string: 2, offset: 3, interval: '1' },
+        { string: 1, offset: 1, interval: 'b3' }
+      ]}
+    ]
+  },
+
+  // dim7 減七和弦（R, b3, b5, 6 ＝ bb7）：每個 CAGED 型單一按法，依使用者提供的指板圖。
+  // 音程表無 bb7，故第 4 音以相同音高（9 半音）的 '6' 表示。
+  dim7: {
+    C: [
+      { id: 'dim7-C', name: 'dim7 C 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
+        { string: 5, offset: 0, interval: '1' },
+        { string: 4, offset: 1, interval: 'b5' },
+        { string: 3, offset: -1, interval: '6' },
+        { string: 2, offset: 1, interval: 'b3' },
+        { string: 1, offset: -1, interval: 'b5' }
+      ]}
+    ],
+    A: [
+      { id: 'dim7-A', name: 'dim7 A 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
+        { string: 5, offset: 0, interval: '1' },
+        { string: 4, offset: 1, interval: 'b5' },
+        { string: 3, mute: true },
+        { string: 2, offset: 1, interval: 'b3' },
+        { string: 1, offset: 2, interval: '6' }
+      ]}
+    ],
+    G: [
+      { id: 'dim7-G', name: 'dim7 G 型', tags: ['full'], strings: [
+        { string: 6, offset: 0, interval: '1' },
+        { string: 5, mute: true },
+        { string: 4, offset: -1, interval: '6' },
+        { string: 3, offset: 0, interval: 'b3' },
+        { string: 2, offset: -1, interval: 'b5' },
+        { string: 1, offset: 0, interval: '1' }
+      ]}
+    ],
+    E: [
+      { id: 'dim7-E', name: 'dim7 E 型', tags: ['full'], strings: [
+        { string: 6, offset: 0, interval: '1' },
+        { string: 5, offset: 1, interval: 'b5' },
+        { string: 4, offset: 2, interval: '1' },
+        { string: 3, offset: 0, interval: 'b3' },
+        { string: 2, offset: 2, interval: '6' },
+        { string: 1, offset: 0, interval: '1' }
+      ]}
+    ],
+    D: [
+      { id: 'dim7-D', name: 'dim7 D 型', tags: ['full'], strings: [
+        { string: 6, mute: true },
+        { string: 5, mute: true },
+        { string: 4, offset: 0, interval: '1' },
+        { string: 3, offset: 1, interval: 'b5' },
+        { string: 2, offset: 0, interval: '6' },
         { string: 1, offset: 1, interval: 'b3' }
       ]}
     ]
   }
 };
-
-// dim7 先沿用 diminished triad。日後若要加入完整減七音，只要新增 dim7 專屬按法即可。
-CAGED_CHORD_VOICINGS.dim7 = CAGED_CHORD_VOICINGS.dim;
 
 export function getChordQualityKey(chordDegreeStr) {
   const chordConfig = CHORD_MODES[chordDegreeStr];
@@ -530,7 +553,7 @@ export function getChordQualityKey(chordDegreeStr) {
 }
 
 /**
- * 將資料定義式 CAGED 和弦フォーム轉成指板與音訊引擎共用的 note object。
+ * 將資料定義式 CAGED 和弦 form 轉成指板與音訊引擎共用的 note object。
  */
 export function resolveCagedChordVoicing(keyRoot, chordDegreeStr, formObj, options = {}) {
   const chordConfig = CHORD_MODES[chordDegreeStr];

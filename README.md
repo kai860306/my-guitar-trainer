@@ -49,7 +49,7 @@
 * **框架 (Framework):** Vue 3 (Script Setup)
 * **構建工具 (Build Tool):** Vite
 * **樣式 (Styling):** Tailwind CSS v4（`@tailwindcss/vite` 外掛，具備磨砂玻璃 Backdrop Blur 質感與霓虹發光特效）
-* **樂理核心 (Core Logic):** 自研 `musicTheory.js` + `cagedScales.js`，涵蓋絕對音高轉換、CAGED 把位推算與 35 組音階 / 和弦 voicing 資料
+* **樂理核心 (Core Logic):** 自研 `musicTheory.js` + `cagedScales.js`，涵蓋絕對音高轉換、CAGED 把位推算，並以演算法生成 35 組 CAGED 音階型（僅手寫各型幾何，音符依調式推算）
 * **音訊引擎 (Audio Engine):** 原生 Web Audio API 硬體級時鐘排程（`audioEngine.js`），刷扣合成 + 單音爬音 + 高音 Click 節拍提示；目前僅在停止播放時呼叫 Web Speech API 的 `speechSynthesis.cancel()` 作為保險，尚未排程實際語音播報
 
 ---
@@ -121,7 +121,7 @@ my-guitar-trainer/
 │   │   └── Fretboard.vue   # 核心組件：二維指板矩陣、音程色彩渲染、把位虛線框與自適應縮放
 │   ├── utils/
 │   │   ├── musicTheory.js  # 樂理核心：CHORD_MODES 資料模型、CAGED 把位推算、和弦 voicing、調式映射
-│   │   ├── cagedScales.js  # CAGED 音階資料與爬音序列產生器 (35 個 form、chord/scale 雙模式 Stage 取音)
+│   │   ├── cagedScales.js  # CAGED 音階型演算法生成 (幾何 + 調式 → 35 個 form) 與爬音序列產生器 (chord/scale 雙模式 Stage 取音)
 │   │   └── audioEngine.js  # Web Audio 硬體時鐘排程：刷扣合成、單音爬音、節拍 Click 與時序三部曲
 │   ├── App.vue             # 應用主入口：全域狀態、拖曳組裝器與音訊引擎橋接
 │   ├── style.css           # 全域樣式
