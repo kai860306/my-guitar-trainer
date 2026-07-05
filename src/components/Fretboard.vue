@@ -216,17 +216,23 @@ const scaleBounds = computed(() => {
 
 const scaleRegionBox = computed(() => {
   // 優先使用上層傳入的「整組和弦進行」統一把位邊界 (所有和弦的 min～max)。
+  // minStringIndex / maxStringIndex 可選：三和弦模式會傳入，只框住選定的三弦；
+  // 未提供時 (CAGED 模式) 預設涵蓋 6 條弦。
   if (props.scaleRegionOverride) {
     return {
       minFret: props.scaleRegionOverride.minFret,
-      maxFret: props.scaleRegionOverride.maxFret
+      maxFret: props.scaleRegionOverride.maxFret,
+      minStringIndex: props.scaleRegionOverride.minStringIndex ?? 0,
+      maxStringIndex: props.scaleRegionOverride.maxStringIndex ?? 5
     };
   }
   if (!scaleBounds.value) return null;
 
   return {
     minFret: scaleBounds.value.minFret,
-    maxFret: scaleBounds.value.maxFret
+    maxFret: scaleBounds.value.maxFret,
+    minStringIndex: 0,
+    maxStringIndex: 5
   };
 });
 
@@ -236,8 +242,9 @@ const scaleRegionClasses = (cell) => {
   const box = scaleRegionBox.value;
   if (!box) return null;
   if (cell.fret < box.minFret || cell.fret > box.maxFret) return null;
-  const topOut = cell.stringIndex === 0; // 1弦 (最上方)
-  const bottomOut = cell.stringIndex === 5; // 6弦 (最下方)
+  if (cell.stringIndex < box.minStringIndex || cell.stringIndex > box.maxStringIndex) return null;
+  const topOut = cell.stringIndex === box.minStringIndex; // 區間最上方的弦
+  const bottomOut = cell.stringIndex === box.maxStringIndex; // 區間最下方的弦
   const lowerFretOut = cell.fret === box.minFret; // 琴頭(nut)側
   const higherFretOut = cell.fret === box.maxFret; // 琴橋側
   // 左手模式時琴頸方向左右相反，需對調左右邊界

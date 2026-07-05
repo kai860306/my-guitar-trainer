@@ -587,6 +587,174 @@ export function getRootFret(formObj) {
   return 0;
 }
 
+// ===== 三和弦（Triad）練習模式 =====
+//
+// 連續三弦組合，值為「低音弦→高音弦」的 stringIndex（0=1弦最細, 5=6弦最粗）。
+// 同一組相鄰弦中，越粗的弦（弦號越大 / stringIndex 越大）音越低，因此低音在前。
+export const TRIAD_STRING_SETS = {
+  '1-3': [2, 1, 0], // 弦 3,2,1
+  '2-4': [3, 2, 1], // 弦 4,3,2
+  '3-5': [4, 3, 2], // 弦 5,4,3
+  '4-6': [5, 4, 3]  // 弦 6,5,4
+};
+
+// 各弦帶八度資訊的絕對音高分數（開放弦），index = stringIndex。
+// 與 resolveCagedChordVoicing 內的 stringPitches 一致 (E4=64 ... E2=40)。
+const TRIAD_STRING_PITCH_SCORES = [64, 59, 55, 50, 45, 40];
+
+// family → 三和弦音程（dom 視為 major，與 cagedScales 的 getTrainingFamily 一致）。
+const TRIAD_INTERVALS_BY_FAMILY = {
+  major: ['1', '3', '5'],
+  minor: ['1', 'b3', '5'],
+  dim:   ['1', 'b3', 'b5']
+};
+
+// 相鄰三弦上「可實際按壓」的 close-voiced 三和弦，最大琴格跨度。
+// 用來排除「低音壓在極低把位、把高音硬疊到很高格」而產生的誇張跨度 voicing
+// （例如低音開放弦 + 高音第 9~10 格），改用其它轉回形。
+const MAX_TRIAD_SPAN = 5;
+
+const triadAbsPitch = (stringIndex, fret) => TRIAD_STRING_PITCH_SCORES[stringIndex] + fret;
+
+// 在指定弦上，找出音高等級為 pc 且絕對音高 > thresholdAbs 的最小琴格。
+const triadFretAbove = (pc, stringIndex, thresholdAbs) => {
+  let fret = (((pc - STRING_OPENS[stringIndex]) % 12) + 12) % 12;
+  while (triadAbsPitch(stringIndex, fret) <= thresholdAbs) fret += 12;
+  return fret;
+};
+
+// 建立一個 close-voiced 三和弦：低音弦放 tones[0]，往高音弦依序疊上比前一個弦音更高的最近音。
+// bassMinFret 決定整個把位落點（用來產生不同八度的候選）。回傳 3 個 note 物件或 null（超出指板）。
+const buildTriadVoicing = (invTones, strings, bassMinFret, chordRootAbs, maxFret) => {
+  const [s0, s1, s2] = strings;
+
+  let f0 = (((invTones[0].pc - STRING_OPENS[s0]) % 12) + 12) % 12;
+  while (f0 < bassMinFret) f0 += 12;
+  const a0 = triadAbsPitch(s0, f0);
+
+  const f1 = triadFretAbove(invTones[1].pc, s1, a0);
+  const a1 = triadAbsPitch(s1, f1);
+
+  const f2 = triadFretAbove(invTones[2].pc, s2, a1);
+
+  const frets = [f0, f1, f2];
+  if (frets.some(f => f < 0 || f > maxFret)) return null;
+
+  return strings.map((stringIndex, i) => {
+    const fret = frets[i];
+    const intervalLabel = invTones[i].interval;
+    const intervalFromChordRoot = INTERVAL_TO_SEMITONE[intervalLabel];
+    const absoluteNote = (STRING_OPENS[stringIndex] + fret + 120) % 12;
+    return {
+      stringIndex,
+      string: stringIndex + 1,
+      fret,
+      absoluteNote,
+      interval: intervalLabel,
+      intervalFromChordRoot,
+      pitchScore: triadAbsPitch(stringIndex, fret),
+      intervalLabel,
+      isValidVoicingNote: absoluteNote === (chordRootAbs + intervalFromChordRoot) % 12
+    };
+  });
+};
+
+/**
+ * 為整組和弦進行產生「連續三弦組」上的三和弦轉回形序列。
+ *
+ * 以貪婪法逐一決定每個和弦的轉回形，讓每次和弦切換的琴格移動量最小
+ * （聲部進行 / voice leading）。第一個和弦取最低且最緊湊的把位。
+ *
+ * @param {number} keyRoot            主調根音 pitch class (0-11)
+ * @param {string[]} progressionArray 羅馬級數字串陣列 (CHORD_MODES 的 key)
+ * @param {string} stringSet          TRIAD_STRING_SETS 的 key ('1-3' | '2-4' | '3-5' | '4-6')
+ * @param {object} [options]          { maxFret = 15, cycle = 0 }
+ *                                     cycle：本輪把位階梯的索引。第一個和弦會依把位由低到高
+ *                                     取第 cycle 個候選，讓每完成一輪就往高把位推進（循環）。
+ * @returns {Array<{ degree, notes }>} 每個和弦一項，notes 為 3 個 note 物件（低音弦→高音弦）
+ */
+export function generateTriadProgressionVoicings(keyRoot, progressionArray, stringSet, options = {}) {
+  const maxFret = Number.isFinite(options.maxFret) ? options.maxFret : 15;
+  const cycle = Number.isInteger(options.cycle) ? options.cycle : 0;
+  const strings = TRIAD_STRING_SETS[stringSet] || TRIAD_STRING_SETS['2-4'];
+
+  const result = [];
+  let prevNotes = null;
+
+  for (const degree of progressionArray || []) {
+    const chordConfig = CHORD_MODES[degree];
+    if (!chordConfig) {
+      result.push({ degree, notes: [] });
+      continue;
+    }
+
+    const chordRootAbs = (keyRoot + chordConfig.offset) % 12;
+    const family = chordConfig.family === 'dom' ? 'major' : chordConfig.family;
+    const intervals = TRIAD_INTERVALS_BY_FAMILY[family] || TRIAD_INTERVALS_BY_FAMILY.major;
+
+    // 三個構成音的 pitch class + interval 標籤。
+    const tones = intervals.map(interval => ({
+      interval,
+      pc: (chordRootAbs + INTERVAL_TO_SEMITONE[interval]) % 12
+    }));
+
+    // 3 個轉回形（低音是 root / 3rd / 5th）× 每個轉回形取兩個八度落點作為候選。
+    const candidates = [];
+    for (let inv = 0; inv < 3; inv++) {
+      const invTones = [tones[inv % 3], tones[(inv + 1) % 3], tones[(inv + 2) % 3]];
+      const bassBase = (((invTones[0].pc - STRING_OPENS[strings[0]]) % 12) + 12) % 12;
+      for (const bassMinFret of [bassBase, bassBase + 12]) {
+        if (bassMinFret > maxFret) continue;
+        const notes = buildTriadVoicing(invTones, strings, bassMinFret, chordRootAbs, maxFret);
+        if (notes) candidates.push(notes);
+      }
+    }
+
+    if (candidates.length === 0) {
+      result.push({ degree, notes: [] });
+      continue;
+    }
+
+    // 先排除跨度過大的誇張 voicing；若全部都過大（極少見）才退回原始候選，避免產生空和弦。
+    const spanOf = (notes) => Math.max(...notes.map(n => n.fret)) - Math.min(...notes.map(n => n.fret));
+    const compact = candidates.filter(notes => spanOf(notes) <= MAX_TRIAD_SPAN);
+    const pool = compact.length > 0 ? compact : candidates;
+
+    let best;
+    if (!prevNotes) {
+      // 本輪的錨點和弦：候選依把位由低到高排成階梯，取第 cycle 個（循環），
+      // 讓每完成一輪進行就往高把位推進，行為與 CAGED 自動循環一致。
+      const ladder = [...pool].sort((a, b) => {
+        const aMin = Math.min(...a.map(n => n.fret));
+        const bMin = Math.min(...b.map(n => n.fret));
+        if (aMin !== bMin) return aMin - bMin;
+        const aSum = a.reduce((s, n) => s + n.fret, 0);
+        const bSum = b.reduce((s, n) => s + n.fret, 0);
+        return aSum - bSum;
+      });
+      best = ladder[((cycle % ladder.length) + ladder.length) % ladder.length];
+    } else {
+      // 後續和弦：與前一個和弦同弦位的琴格移動總和最小 + 些微跨度懲罰，
+      // 使整輪的三和弦集中在同一把位、只換轉回形。
+      let bestScore = Infinity;
+      for (const cand of pool) {
+        const move = cand.reduce((sum, n, i) => sum + Math.abs(n.fret - prevNotes[i].fret), 0);
+        const span = spanOf(cand);
+        const score = move + span * 0.25;
+        if (score < bestScore) {
+          bestScore = score;
+          best = cand;
+        }
+      }
+    }
+
+    result.push({ degree, notes: best });
+    prevNotes = best;
+  }
+
+  return result;
+}
+
 export const PROGRESSION_PRESETS = {
   'I - IV - V': ['I', 'IV', 'V'],
   'ii - V - I': ['ii', 'V', 'I'],

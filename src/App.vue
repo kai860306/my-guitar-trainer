@@ -6,7 +6,9 @@ import {
   CHORD_MODES,
   PROGRESSION_PRESETS,
   getDynamicCagedForm,
-  resolveCagedChordVoicing
+  resolveCagedChordVoicing,
+  generateTriadProgressionVoicings,
+  TRIAD_STRING_SETS
 } from './utils/musicTheory.js';
 
 import {
@@ -44,6 +46,17 @@ const DEFAULT_IS_LEFT_HANDED = false;
 // chord = 從目前和弦根音看音程。
 // key = 從目前 Key 根音看音程。
 const DEFAULT_INTERVAL_DISPLAY_MODE = 'chord';
+
+// 預設 Train phase 音生成引擎。
+// stage  = 階梯爬升解鎖（chord / scale 的 stageMode）
+// custom = 自訂音序器
+// triad  = 三和弦琶音（連續三弦組）
+const DEFAULT_TRAINING_INPUT_MODE = 'stage';
+const TRAINING_INPUT_MODES = ['stage', 'custom', 'triad'];
+
+// 三和弦模式的連續三弦組（TRIAD_STRING_SETS 的 key）。
+const TRIAD_STRING_SET_KEYS = Object.keys(TRIAD_STRING_SETS);
+const DEFAULT_TRIAD_STRING_SET = '2-4';
 
 // 畫面初始顯示用。
 // 若之後有保存設定，onMounted 時會依照保存的和弦進行重新覆蓋。
@@ -102,9 +115,12 @@ const isLeftHanded = ref(DEFAULT_IS_LEFT_HANDED);
 // key：例如在 C Key 裡，G 會顯示 5。
 const intervalDisplayMode = ref(DEFAULT_INTERVAL_DISPLAY_MODE);
 
-// 自訂訓練音序器狀態
-const isCustomSequenceMode = ref(false);
+// Train phase 音生成引擎選擇：'stage' | 'custom' | 'triad'
+const trainingInputMode = ref(DEFAULT_TRAINING_INPUT_MODE);
 const customSequenceArray = ref(createSequenceCards());
+
+// 三和弦模式選擇的連續三弦組。
+const selectedTriadStringSet = ref(DEFAULT_TRIAD_STRING_SET);
 
 // 運行與 UI 切換狀態
 const isTrainingActive = ref(false); // 點擊 Start 切換至極簡運動 UI
@@ -146,7 +162,8 @@ const getDefaultSettings = () => ({
   selectedStage: DEFAULT_STAGE,
   isLeftHanded: DEFAULT_IS_LEFT_HANDED,
   intervalDisplayMode: DEFAULT_INTERVAL_DISPLAY_MODE,
-  isCustomSequenceMode: false,
+  trainingInputMode: DEFAULT_TRAINING_INPUT_MODE,
+  selectedTriadStringSet: DEFAULT_TRIAD_STRING_SET,
   customSequenceArray: createSequenceCards()
 });
 
@@ -201,7 +218,18 @@ const applySettingsToState = (settings) => {
     ? 'key'
     : 'chord';
 
-  isCustomSequenceMode.value = Boolean(safeSettings.isCustomSequenceMode);
+  // Train phase 引擎模式。
+  // 後方互換：舊版只有 isCustomSequenceMode(bool)，沒有 trainingInputMode 欄位時，
+  //          true → 'custom'，false → 'stage'。
+  if (TRAINING_INPUT_MODES.includes(safeSettings.trainingInputMode)) {
+    trainingInputMode.value = safeSettings.trainingInputMode;
+  } else {
+    trainingInputMode.value = safeSettings.isCustomSequenceMode ? 'custom' : DEFAULT_TRAINING_INPUT_MODE;
+  }
+
+  selectedTriadStringSet.value = TRIAD_STRING_SET_KEYS.includes(safeSettings.selectedTriadStringSet)
+    ? safeSettings.selectedTriadStringSet
+    : defaults.selectedTriadStringSet;
 
   customSequenceArray.value = Array.isArray(safeSettings.customSequenceArray)
     ? safeSettings.customSequenceArray
@@ -246,7 +274,8 @@ const saveSettings = () => {
       selectedStage: selectedStage.value,
       isLeftHanded: isLeftHanded.value,
       intervalDisplayMode: intervalDisplayMode.value,
-      isCustomSequenceMode: isCustomSequenceMode.value,
+      trainingInputMode: trainingInputMode.value,
+      selectedTriadStringSet: selectedTriadStringSet.value,
       customSequenceArray: customSequenceArray.value
     };
 
@@ -518,6 +547,11 @@ const minFret = computed(() => currentDynamicForm.value ? currentDynamicForm.val
 const maxFret = computed(() => currentDynamicForm.value ? currentDynamicForm.value.max : 4);
 const currentFormName = computed(() => currentDynamicForm.value ? currentDynamicForm.value.name : 'C');
 
+// 訓練畫面「目前把位」標籤：三和弦模式顯示弦組，其餘顯示 CAGED form。
+const currentPositionLabel = computed(() =>
+  isTriadMode.value ? `${selectedTriadStringSet.value} 弦三和弦` : `${currentFormName.value} 型`
+);
+
 // ✨ 下一個和弦黑/紅閃爍的週期與 BPM 同步：一拍一次完整的黑紅循環
 const flashStyle = computed(() => ({
   animationDuration: (60 / bpm.value) + 's'
@@ -573,6 +607,55 @@ const displayDynamicForm = computed(() => {
 // 指板總格數需與 Fretboard 內的 totalFrets 一致。
 const FRETBOARD_TOTAL_FRETS = 15;
 
+// ===== 三和弦模式 =====
+const isTriadMode = computed(() => trainingInputMode.value === 'triad');
+
+// 指定 cycle 的整組和弦進行三和弦轉回形序列（最小移動 voice leading）。
+// cycle 隨每輪進行遞增，讓整組把位往高處階梯推進（與 CAGED 自動循環一致）。
+const computeTriadVoicings = (cycle) => {
+  if (!isTriadMode.value) return [];
+  return generateTriadProgressionVoicings(
+    keyRoot.value,
+    getActiveProgression(),
+    selectedTriadStringSet.value,
+    { maxFret: FRETBOARD_TOTAL_FRETS, cycle }
+  );
+};
+
+// 目前 cycle 的三和弦序列（供指板 ghost dots 使用）。
+const triadProgressionVoicings = computed(() => computeTriadVoicings(cagedCycle.value));
+
+// 目前顯示中的和弦在三和弦序列裡的 index（未播放時固定第 0 項）。
+const triadCurrentIndex = computed(() => {
+  const voicings = triadProgressionVoicings.value;
+  if (!voicings.length) return 0;
+  const idx = isPlaying.value ? currentChordIdx.value : 0;
+  return ((idx % voicings.length) + voicings.length) % voicings.length;
+});
+
+// 整組和弦進行在指定 cycle 的統一把位邊界：取所有和弦三和弦的最小～最大琴格，
+// 上下各留 1 格，用同一個綠色虛線矩形框住「這一輪」的整組三和弦。
+const computeTriadRegionForCycle = (cycle) => {
+  const voicings = computeTriadVoicings(cycle);
+  let minFret = Infinity;
+  let maxFret = -Infinity;
+  for (const v of voicings) {
+    for (const n of (v.notes || [])) {
+      minFret = Math.min(minFret, n.fret);
+      maxFret = Math.max(maxFret, n.fret);
+    }
+  }
+  if (minFret === Infinity || maxFret === -Infinity) return null;
+  // 只框住選定的三弦：弦方向也限制在該弦組的 stringIndex 範圍。
+  const stringIdxs = TRIAD_STRING_SETS[selectedTriadStringSet.value] || [];
+  return {
+    minFret: Math.max(0, minFret - 1),
+    maxFret: Math.min(FRETBOARD_TOTAL_FRETS, maxFret + 1),
+    minStringIndex: stringIdxs.length ? Math.min(...stringIdxs) : 0,
+    maxStringIndex: stringIdxs.length ? Math.max(...stringIdxs) : 5
+  };
+};
+
 const computeProgressionScaleRegion = (cycle) => {
   const progArray = getActiveProgression();
   let minFret = Infinity;
@@ -589,6 +672,17 @@ const computeProgressionScaleRegion = (cycle) => {
 };
 
 const displayScaleRegion = computed(() => {
+  // 三和弦模式：用「整組和弦進行」在同一 cycle 的統一琴格邊界框住這一輪的三和弦；
+  //            預告期若下一個和弦回到第 0 項（整輪結束），提前切到下一輪（更高把位）的邊界。
+  if (isTriadMode.value) {
+    let triadCycle = cagedCycle.value;
+    if (!isIntroPredict.value && isPlaying.value && currentPhase.value === 'predict') {
+      const progArray = getActiveProgression();
+      const nextIdx = (currentChordIdx.value + 1) % progArray.length;
+      if (nextIdx === 0) triadCycle = cagedCycle.value + 1;
+    }
+    return computeTriadRegionForCycle(triadCycle);
+  }
   // 預告期 (predict) 且下一個和弦回到進行第 0 項時，整輪結束、把位推進一個 cycle，
   //   提前切換到下一輪進行的整組邊界 (與 displayDynamicForm 的推進邏輯一致)。
   let cycle = cagedCycle.value;
@@ -600,8 +694,11 @@ const displayScaleRegion = computed(() => {
   return computeProgressionScaleRegion(cycle);
 });
 
-// 🎸 Prep 階段顯示與播放用的資料定義式 CAGED 和弦フォーム
+// 🎸 Prep 階段顯示與播放用的和弦 voicing（指板 ghost dots + 刷弦來源）。
 const prepChordVoicingNotes = computed(() => {
+  if (isTriadMode.value) {
+    return triadProgressionVoicings.value[triadCurrentIndex.value]?.notes || [];
+  }
   if (!currentDynamicForm.value) return [];
   return resolveCagedChordVoicing(keyRoot.value, currentChord.value, currentDynamicForm.value);
 });
@@ -609,39 +706,56 @@ const prepChordVoicingNotes = computed(() => {
 // 🔄 同步前端面板參數至音訊引擎
 const syncEngineParams = () => {
   if (!trainerAudio) return;
-  const prog = getActiveProgression();
   const progArray = getActiveProgression();
   const customTokens = getCustomSequenceTokens();
-  
-  // 生成當前自動爬音序列
-  const activeChord = isPlaying.value ? currentChord.value : progArray[0];
-  // 把位必須與 activeChord 相符；未播放時 currentDynamicForm 仍是舊和弦 (如初始 vi)，
-  // 不能直接拿來算，否則會產生「和弦對不上把位」的錯誤爬音 (第一次開始播 vi 的 bug)。
-  const activeForm = isPlaying.value
-    ? currentDynamicForm.value
-    : getDynamicCagedForm(activeChord, keyRoot.value, cagedCycle.value);
-  const cagedSeq = generateCagedScaleSequence(
-    keyRoot.value,
-    activeChord,
-    activeForm,
-    selectedStage.value,
-    selectedTrainingStageMode.value,
-    false
-  );
+  const isCustom = trainingInputMode.value === 'custom';
+  const triadMode = trainingInputMode.value === 'triad';
 
-  const prepVoicingNotes = resolveCagedChordVoicing(keyRoot.value, activeChord, activeForm);
-  
+  let cagedSeq;
+  let prepVoicingNotes;
+
+  if (triadMode) {
+    // 三和弦模式：prep 刷弦 = 三和弦 3 音；train 爬音 = 同 3 音依音高昇冪。
+    const idx = isPlaying.value ? currentChordIdx.value : 0;
+    const voicings = triadProgressionVoicings.value;
+    const safeIdx = voicings.length
+      ? ((idx % voicings.length) + voicings.length) % voicings.length
+      : 0;
+    const notes = voicings[safeIdx]?.notes || [];
+    prepVoicingNotes = notes;
+    cagedSeq = [...notes].sort((a, b) => a.pitchScore - b.pitchScore);
+  } else {
+    // 生成當前自動爬音序列
+    const activeChord = isPlaying.value ? currentChord.value : progArray[0];
+    // 把位必須與 activeChord 相符；未播放時 currentDynamicForm 仍是舊和弦 (如初始 vi)，
+    // 不能直接拿來算，否則會產生「和弦對不上把位」的錯誤爬音 (第一次開始播 vi 的 bug)。
+    const activeForm = isPlaying.value
+      ? currentDynamicForm.value
+      : getDynamicCagedForm(activeChord, keyRoot.value, cagedCycle.value);
+    cagedSeq = generateCagedScaleSequence(
+      keyRoot.value,
+      activeChord,
+      activeForm,
+      selectedStage.value,
+      selectedTrainingStageMode.value,
+      false
+    );
+    prepVoicingNotes = resolveCagedChordVoicing(keyRoot.value, activeChord, activeForm);
+  }
+
   trainerAudio.setBPM(bpm.value);
   trainerAudio.updateParams(
     progArray,
     selectedStage.value,
     false,
-    isCustomSequenceMode.value,
+    isCustom,
     customTokens,
     cagedSeq,
     keyRoot.value,
     prepVoicingNotes,
-    cagedCycle.value
+    cagedCycle.value,
+    triadMode,
+    selectedTriadStringSet.value
   );
 };
 
@@ -659,7 +773,8 @@ watch([
   selectedStage,
   isLeftHanded,
   intervalDisplayMode,
-  isCustomSequenceMode,
+  trainingInputMode,
+  selectedTriadStringSet,
   customSequenceArray
 ], () => {
   saveSettings();
@@ -895,12 +1010,13 @@ const exitTraining = () => {
         <div class="flex justify-between items-center">
           <h3 class="text-sm font-bold text-zinc-400 tracking-wide">4. 音程特訓模式演算法</h3>
           <div class="flex gap-2 text-xs">
-            <button @click="isCustomSequenceMode = false" class="px-3 py-1 rounded" :class="!isCustomSequenceMode ? 'bg-zinc-700 text-white' : 'text-zinc-500'">階梯爬升解鎖</button>
-            <button @click="isCustomSequenceMode = true" class="px-3 py-1 rounded" :class="isCustomSequenceMode ? 'bg-zinc-700 text-white' : 'text-zinc-500'">自訂音序器</button>
+            <button @click="trainingInputMode = 'stage'" class="px-3 py-1 rounded" :class="trainingInputMode === 'stage' ? 'bg-zinc-700 text-white' : 'text-zinc-500'">階梯爬升解鎖</button>
+            <button @click="trainingInputMode = 'custom'" class="px-3 py-1 rounded" :class="trainingInputMode === 'custom' ? 'bg-zinc-700 text-white' : 'text-zinc-500'">自訂音序器</button>
+            <button @click="trainingInputMode = 'triad'" class="px-3 py-1 rounded" :class="trainingInputMode === 'triad' ? 'bg-zinc-700 text-white' : 'text-zinc-500'">三和弦琶音</button>
           </div>
         </div>
 
-        <div v-if="!isCustomSequenceMode" class="space-y-3">
+        <div v-if="trainingInputMode === 'stage'" class="space-y-3">
           <div class="grid grid-cols-2 gap-2">
             <button
               v-for="(modeConfig, modeKey) in TRAINING_STAGE_MODES"
@@ -934,7 +1050,7 @@ const exitTraining = () => {
           </div>
         </div>
 
-        <div v-else class="space-y-3">
+        <div v-else-if="trainingInputMode === 'custom'" class="space-y-3">
           <!-- 已選音程序列 (Drop Zone) -->
           <div ref="sequenceContainerRef">
             <transition-group 
@@ -982,6 +1098,25 @@ const exitTraining = () => {
 
           <p class="text-xs text-zinc-500 text-center leading-relaxed">
             💡 支援 <span class="text-zinc-300">1-7</span> 代表順階度數，前綴 <span class="text-zinc-300">L</span> 代表低音，前綴 <span class="text-zinc-300">H</span> 代表高音。後台會依據當前和弦自動切換調式（Mode）防跑調。
+          </p>
+        </div>
+
+        <div v-else class="space-y-3">
+          <div class="text-[0.7rem] font-bold text-zinc-500 tracking-wide uppercase">連續三弦組</div>
+          <div class="grid grid-cols-4 gap-2">
+            <button
+              v-for="setKey in TRIAD_STRING_SET_KEYS"
+              :key="'triad-set-' + setKey"
+              @click="selectedTriadStringSet = setKey"
+              class="py-3 rounded-xl border font-bold text-sm transition-all"
+              :class="selectedTriadStringSet === setKey ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+            >
+              {{ setKey }} 弦
+            </button>
+          </div>
+
+          <p class="text-xs text-zinc-500 text-center leading-relaxed">
+            🎸 在選定的相鄰三弦上，用三和弦（Triad）彈奏上方的和弦進行。後台會依和弦性質（大 / 小 / 減）自動挑選轉回形，讓每次換和弦的<span class="text-zinc-300">琴格移動量最小</span>（Voice Leading）。Prep 刷三和弦，Train 依低音到高音逐音爬升。
           </p>
         </div>
       </div>
@@ -1090,7 +1225,7 @@ const exitTraining = () => {
         </div>
 
         <div class="flex items-center text-zinc-400 font-bold text-xs sm:text-sm whitespace-nowrap">
-          目前把位:<span class="text-emerald-400 ml-1.5 text-base sm:text-lg">{{ currentFormName }} 型</span>
+          目前把位:<span class="text-emerald-400 ml-1.5 text-base sm:text-lg">{{ currentPositionLabel }}</span>
         </div>
       </div>
 

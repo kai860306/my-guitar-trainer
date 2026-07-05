@@ -4,7 +4,8 @@ import {
   getAbsoluteNoteFromToken,
   getChordPitches,
   getDynamicCagedForm,
-  resolveCagedChordVoicing
+  resolveCagedChordVoicing,
+  generateTriadProgressionVoicings
 } from './musicTheory.js';
 
 // ===============================
@@ -154,7 +155,9 @@ export class AudioEngine {
     cagedSeq,
     keyRoot,
     prepChordVoicingNotes = [],
-    cagedCycle = null
+    cagedCycle = null,
+    triadMode = false,
+    triadStringSet = '2-4'
   ) {
     this.progression = prog;
     this.stage = stage;
@@ -164,11 +167,32 @@ export class AudioEngine {
     this.cagedSequence = cagedSeq;
     this.keyRoot = keyRoot;
     this.prepChordVoicingNotes = prepChordVoicingNotes;
+    // 三和弦模式：prep 刷弦與 train 爬音都改由引擎依 currentChordIdx / currentCagedCycle
+    //            即時計算（getLiveTriadVoicings），避免 Vue 回呼落後造成刷弦停在第一個和弦。
+    this.triadMode = triadMode;
+    this.triadStringSet = triadStringSet;
+    this._triadCacheKey = null; // 參數變更後讓三和弦快取失效。
 
     // 播放中由排程器自己推進 CAGED cycle，避免 lookahead 回呼造成第一拍和弦提示落後。
     if (!this.isPlaying && Number.isFinite(cagedCycle)) {
       this.currentCagedCycle = cagedCycle;
     }
+  }
+
+  // 依指定 cycle 即時（memoized）計算整組進行的三和弦轉回形序列。
+  // 以 currentChordIdx 取當前和弦，達成刷弦 / 爬音與排程器同步、每輪往高把位推進。
+  getLiveTriadVoicings(cycle) {
+    const key = `${cycle}|${this.keyRoot}|${this.triadStringSet}|${(this.progression || []).join(',')}`;
+    if (this._triadCacheKey !== key) {
+      this._triadVoicings = generateTriadProgressionVoicings(
+        this.keyRoot,
+        this.progression,
+        this.triadStringSet,
+        { cycle }
+      );
+      this._triadCacheKey = key;
+    }
+    return this._triadVoicings;
   }
 
   createPluckedSound(freq, time) {
@@ -356,7 +380,16 @@ export class AudioEngine {
       return;
     }
 
-    const trainLen = this.isCustomMode ? this.customTokens.length : this.cagedSequence.length;
+    let trainLen;
+    if (this.isCustomMode) {
+      trainLen = this.customTokens.length;
+    } else if (this.triadMode) {
+      // 三和弦模式：train 逐拍爬升三和弦的 3 個構成音。
+      const notes = this.getLiveTriadVoicings(this.currentCagedCycle)[this.currentChordIdx]?.notes;
+      trainLen = notes && notes.length ? notes.length : 3;
+    } else {
+      trainLen = this.cagedSequence.length;
+    }
     const trainTotalBeats = Math.max(1, trainLen); // 確保至少有 1 拍
     const chordTotalBeats = 4 + trainTotalBeats + 4; // Prep + Train + Predict
 
@@ -389,13 +422,21 @@ export class AudioEngine {
         const chordConfig = CHORD_MODES[chordStr];
 
         if (chordConfig) {
-          // 優先在音訊排程當下依目前和弦與 CAGED cycle 即時計算 voicing。
-          // 這可避免進行回到第 1 個和弦時，prep 第一拍仍播放上一輪把位的問題。
-          const liveForm = getDynamicCagedForm(chordStr, this.keyRoot, this.currentCagedCycle);
-          const liveVoicingNotes = resolveCagedChordVoicing(this.keyRoot, chordStr, liveForm);
-          const sourceVoicingNotes = liveVoicingNotes.length > 0
-            ? liveVoicingNotes
-            : this.prepChordVoicingNotes;
+          // 三和弦模式：直接使用外部算好的三弦組三和弦 voicing（不套用 CAGED）。
+          // 其他模式：優先在音訊排程當下依目前和弦與 CAGED cycle 即時計算 voicing，
+          //          以避免進行回到第 1 個和弦時，prep 第一拍仍播放上一輪把位的問題。
+          let sourceVoicingNotes;
+          if (this.triadMode) {
+            // 依當前 cycle / chordIdx 即時取三和弦（隨和弦切換而變、每輪往高把位推進）。
+            const voicings = this.getLiveTriadVoicings(this.currentCagedCycle);
+            sourceVoicingNotes = voicings[this.currentChordIdx]?.notes || [];
+          } else {
+            const liveForm = getDynamicCagedForm(chordStr, this.keyRoot, this.currentCagedCycle);
+            const liveVoicingNotes = resolveCagedChordVoicing(this.keyRoot, chordStr, liveForm);
+            sourceVoicingNotes = liveVoicingNotes.length > 0
+              ? liveVoicingNotes
+              : this.prepChordVoicingNotes;
+          }
 
           if (sourceVoicingNotes && sourceVoicingNotes.length > 0) {
             // 模擬真實吉他刷弦：從粗弦刷到細弦。
@@ -420,6 +461,8 @@ export class AudioEngine {
       // 這裡故意不呼叫 scheduleMetronomeClick()，所以音階播放時不會疊加節拍器。
       const trainIndex = this.currentChordBeat - 4;
       
+      // 依模式決定本拍要爬升的音：自訂 token / 三和弦（低音→高音）/ CAGED 爬音序列。
+      let noteObj = null;
       if (this.isCustomMode) {
         if (this.customTokens.length > 0) {
           const token = this.customTokens[trainIndex % this.customTokens.length];
@@ -427,29 +470,38 @@ export class AudioEngine {
 
           // 正確順序是 keyRoot, chordDegreeStr, token。
           const absNote = getAbsoluteNoteFromToken(this.keyRoot, chordStr, token);
-          
-          const freq = 130.81 * Math.pow(2, (absNote - 0) / 12); 
+
+          const freq = 130.81 * Math.pow(2, (absNote - 0) / 12);
           this.createPluckedSound(freq, time);
           activeNoteTarget = { type: 'custom', token, trainIndex };
         }
+      } else if (this.triadMode) {
+        // 即時取當前三和弦，依音高由低到高排序後逐拍爬升。
+        const triadNotes = [...(this.getLiveTriadVoicings(this.currentCagedCycle)[this.currentChordIdx]?.notes || [])]
+          .sort((a, b) => a.pitchScore - b.pitchScore);
+        if (trainIndex < triadNotes.length) {
+          noteObj = triadNotes[trainIndex];
+        }
       } else {
         if (trainIndex < this.cagedSequence.length) {
-          const noteObj = this.cagedSequence[trainIndex];
-
-          // 以 5 弦空弦 A2=110Hz 為基準推算各弦音高。
-          const baseOffsets = [24, 19, 15, 10, 5, 0];
-          const freq = 110 * Math.pow(2, (noteObj.fret + baseOffsets[noteObj.stringIndex]) / 12);
-          
-          this.createPluckedSound(freq, time);
-          activeNoteTarget = {
-            type: 'default',
-            stringIndex: noteObj.stringIndex,
-            fret: noteObj.fret,
-            absoluteNote: noteObj.absoluteNote,
-            interval: noteObj.intervalFromChordRoot,
-            intervalLabel: noteObj.intervalLabel || noteObj.interval
-          };
+          noteObj = this.cagedSequence[trainIndex];
         }
+      }
+
+      if (noteObj) {
+        // 以 5 弦空弦 A2=110Hz 為基準推算各弦音高。
+        const baseOffsets = [24, 19, 15, 10, 5, 0];
+        const freq = 110 * Math.pow(2, (noteObj.fret + baseOffsets[noteObj.stringIndex]) / 12);
+
+        this.createPluckedSound(freq, time);
+        activeNoteTarget = {
+          type: 'default',
+          stringIndex: noteObj.stringIndex,
+          fret: noteObj.fret,
+          absoluteNote: noteObj.absoluteNote,
+          interval: noteObj.intervalFromChordRoot,
+          intervalLabel: noteObj.intervalLabel || noteObj.interval
+        };
       }
     } else if (phase === 'predict') {
       // 【預告期】播放高音 Click 輔助下一個和弦預告。
