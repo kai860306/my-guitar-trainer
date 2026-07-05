@@ -19,10 +19,14 @@
 4. **和弦進行組裝器（Drag-and-Drop Chords）**：
    * 支援內建預設：`I - IV - V`、`ii - V - I`、`vi - IV - I - V`、`I - vi - ii - V`。
    * 系統第一次開啟或沒有保存設定時，預設選用 `I - IV - V`。
-   * 自由自訂模式使用「拖拉字卡」UI。可用和弦庫依性質分為三大類：
+   * 自由自訂模式使用「拖拉字卡」UI。可用和弦庫依性質分為七大類：
      * **順階三和弦**：`I, ii, iii, IV, V, vi, vii°`
      * **順階七和弦**：`IM7, iim7, iiim7, IVM7, V7, vim7, viim7b5`
-     * **調外 / 借用和弦（Modal Interchange）**：`bIII, bVI, bVII, vii°7`
+     * **同主調三和弦（Modal Interchange）**：`i, ii°, bIII, iv, v, bVI, bVII`
+     * **同主調七和弦**：`im7, iim7b5, bIIIM7, ivm7, vm7, bVIM7, bVII7`
+     * **副屬七和弦（Secondary Dominant）**：`V7/ii, V7/iii, V7/IV, V7/V, V7/vi`
+     * **關聯 II（Related II）**：`IIm7b5/ii, IIm7b5/iii, IIm7/IV, IIm7/V, IIm7b5/vi`
+     * **裏和弦（SubV7 / Tritone Substitute）**：`SubV7/I, SubV7/ii, SubV7/iii, SubV7/IV, SubV7/V, SubV7/vi`
    * 使用者可透過拖曳或直接點擊卡片將和弦加入進行列。
    * 拖曳以 **Pointer Events** 統一實作，桌機滑鼠與手機觸控皆可拖曳；拖曳中顯示跟隨指針的浮動字卡，未達拖曳門檻則視為點擊（庫卡新增 / 進行卡移除）。
    * 支援拖曳插入特定縫隙、重排特定順位與動畫擠壓效果。拖曳重排放開後，被移動的字卡會換新 id 並以原地淡入動畫呈現，避免從版面左上角飛入的破圖。
@@ -30,34 +34,40 @@
    * **底層資料模型**：每張和弦字卡以統一結構描述（`offset` 根音半音距離、`mode` 調式音階、`family` 大小調 / 屬七 / 減和弦體系、`label` 和弦性質、`modeName` 調式名稱）。新增字卡主要需於 `CHORD_MODES` 增加資料，指板、音訊、爬音邏輯即可共用。
 5. **BPM 調整欄**：提供 `+` / `-` 按鈕，每次 ±5 BPM；可調範圍 40–240 BPM，預設 85 BPM。讀取保存設定時也會將 BPM 限制在此範圍。
 6. **雙驅動音序模式**：
-   * **階梯解鎖模式（Stage 1-5）**：目前實作使用 `CAGED_SCALES` 內建的 7 種調式 × 5 種 CAGED 型，共 35 個靜態音階型；每個型的 `path` 決定實際播放順序，Stage 只負責依音程過濾。
-     * **Major / Dominant 體系**：
-       * Stage 1：`1, 3, 5`
-       * Stage 2：`1, 2, 3, 5`
-       * Stage 3：`1, 2, 3, 5, 6`
-       * Stage 4：`1, 2, 3, 5, 6, 7, b7`，再依當前調式實際存在的音程過濾，例如 Ionian 留 `7`、Mixolydian 留 `b7`
-       * Stage 5：完整調式音階
-     * **Minor 體系**：
-       * Stage 1：`1, b3, 5`
-       * Stage 2：`1, b3, 4, 5`
-       * Stage 3：`1, b3, 4, 5, b7`
-       * Stage 4：`1, 2, b3, 4, 5, b7`
-       * Stage 5：完整調式音階
-     * **Diminished 體系**：
-       * Stage 1：`1, b3, b5`
-       * Stage 2：`1, b3, 4, b5`
-       * Stage 3：`1, b3, 4, b5, b7`
-       * Stage 4：`1, b2, b3, 4, b5, b6, b7`
-       * Stage 5：完整調式音階
-     * Stage 過濾後若同一條弦、同一個 offset 連續出現，會自動去除重複音，避免折返點重複播放同一音。
+   * **階梯爬升解鎖**：可切換兩種獨立的「音程特訓模式演算法」，各自有自己的 Stage 數與解鎖曲線；`CAGED_SCALES` 內建的 7 種調式 × 5 種 CAGED 型（共 35 個靜態音階型）的 `path` 決定實際播放順序，Stage 只負責依音程過濾。設定保存時會各自記住目前選用的模式與 Stage。
+     * **和弦基礎模式（`chord`，預設，Stage 1-5）**：Triad → 7th → 9th → 11th → 13th，逐階為三和弦疊加和弦延伸色彩。
+       * **Major / Dominant 體系**：
+         * Stage 1（三和弦）：`1, 3, 5`
+         * Stage 2（三和弦 + 7th）：`1, 3, 5, 7, b7`
+         * Stage 3（三和弦 + 9th）：`1, 3, 5, 2, b2`
+         * Stage 4（三和弦 + 11th）：`1, 3, 5, 4, #4`
+         * Stage 5（三和弦 + 13th）：`1, 3, 5, 6, b6`
+       * **Minor 體系**：
+         * Stage 1（三和弦）：`1, b3, 5`
+         * Stage 2（三和弦 + 7th）：`1, b3, 5, b7, 7`
+         * Stage 3（三和弦 + 9th）：`1, b3, 5, 2, b2`
+         * Stage 4（三和弦 + 11th）：`1, b3, 5, 4, #4`
+         * Stage 5（三和弦 + 13th）：`1, b3, 5, 6, b6`
+       * **Diminished 體系**：
+         * Stage 1（三和弦）：`1, b3, b5`
+         * Stage 2（三和弦 + 7th）：`1, b3, b5, b7, 7`
+         * Stage 3（三和弦 + 9th）：`1, b3, b5, 2, b2`
+         * Stage 4（三和弦 + 11th）：`1, b3, b5, 4, #4`
+         * Stage 5（三和弦 + 13th）：`1, b3, b5, 6, b6`
+       * 每個 Stage 列出的候選音程（如 `7` 與 `b7`、`2` 與 `b2`、`4` 與 `#4`、`6` 與 `b6`）會再依當前調式實際存在的音程過濾，例如 Ionian 只留 `7`、Mixolydian 只留 `b7`、Lydian 只留 `#4`。
+     * **音階基礎模式（`scale`，Stage 1-3）**：Triad → Pentatonic → Mode Scale。
+       * **Major 體系**：Stage 1（大小三和弦）`1, 3, 5` → Stage 2（大小五聲音階）`1, 2, 3, 5, 6` → Stage 3（調式音階）解鎖完整 Mode Scale
+       * **Minor 體系**：Stage 1 `1, b3, 5` → Stage 2 `1, b3, 4, 5, b7` → Stage 3 解鎖完整 Mode Scale
+       * **Diminished 體系**：Stage 1 `1, b3, b5` → Stage 2 `1, b3, 4, b5, b7` → Stage 3 解鎖完整 Mode Scale
+     * 兩種模式的 Stage 過濾後，若同一條弦、同一個 offset 連續出現，會自動去除重複音，避免折返點重複播放同一音。
    * **自訂音序器（Custom Sequence Builder）**：文字輸入框接受逗號分隔的相對音程指令，如 `L5, L6, 1, 2, L7, 1`。目前實作支援 `1`–`7` 與大寫 `L` 前綴，`L` 代表低八度。系統會依目前和弦的 `mode` 陣列將度數映射為絕對音高。
 7. **把位自動循環（Dynamic CAGED Auto-Cycling）**：
    * 系統依和弦根音計算 C / A / G / E / D 五種 CAGED 型的可用把位區間，只保留位於 0–15 格範圍內且根音不超過 14 格的型。
    * 可用型會依把位中心點由低到高排序；第 0 輪會選擇最接近琴首低把位（中心約第 2 格）的型。
    * 每完成一整輪和弦進行，CAGED cycle 增加 1，下一輪會使用排序後的下一個可用高把位；不是固定以 `C → A → G → E → D` 的字面順序循環。
 8. **設定保存與復原**：
-   * 保存項目包含：主調、內建進行名稱、自訂進行、是否使用自訂進行、BPM、Stage、左右手模式、是否使用自訂音序、自訂音序文字。
-   * 若保存資料格式錯誤或包含不存在的和弦，系統會過濾或回退預設值，不中斷訓練功能。
+   * 保存項目包含：主調、內建進行名稱、自訂進行、是否使用自訂進行、BPM、音程特訓模式（`chord` / `scale`）、Stage、左右手模式、指板音程顯示基準（`chord` / `key`）、是否使用自訂音序、自訂音序文字。
+   * 若保存資料格式錯誤或包含不存在的和弦，系統會過濾或回退預設值，不中斷訓練功能；Stage 上限也會依保存的音程特訓模式（`chord`=5 / `scale`=3）重新夾範圍。
 
 ### 2.2 核心訓練頁面（Training Screen）— 運動極簡佈局
 1. **上方：當前和弦與指示區**：
@@ -81,6 +91,7 @@
    * **弦間無分隔線**：弦與弦之間不顯示水平分隔線，只保留各弦本身的金屬線條與垂直琴格線。
 3. **底部 / 控制列**：
    * 訓練畫面提供較小的「退出特訓」按鈕與目前把位文字提示（如 `目前把位：E 型`）。
+   * **音程顯示基準切換**：提供「從 Chord」／「從 Key」二選一按鈕，即時切換指板音程顯示基準（`intervalDisplayMode`）：從 Chord 時音程數字相對於目前和弦根音（例如 V 和弦上 G 顯示 `1`）；從 Key 時音程數字相對於主調 Key 根音（例如 C Key 裡 G 顯示 `5`）。此設定會保存於 `localStorage`。
    * 目前實作沒有訓練畫面內的超大暫停 / 恢復鍵；暫停邏輯存在於音訊引擎 `toggle()`，但 UI 只有進入訓練前的開始按鈕與訓練中的退出按鈕。
 4. **安全區與不捲動版面**：
    * 訓練畫面使用 `100dvh`、`overflow: hidden` 與 iOS safe-area padding，目標是在 PC、iPad 橫屏與 iPhone 橫屏中不需上下捲動即可看到主要資訊。
@@ -129,8 +140,8 @@
 ### 4.3 CAGED scale 與 diminished 的現況
 * 預設訓練使用靜態 CAGED scale 資料，不在執行時自動生成完整音階指法。每個 mode / form 的 notes 與 path 都可在資料中手動調整。
 * 7 種 church modes × 5 種 CAGED forms 共 35 個 shape 會在開發模式中檢查完整性。
-* `vii°7` 的 `mode` 使用 8 音 diminished 音階資料，但 CAGED scale shape 目前會 fallback 到 Locrian 類型，避免 UI / 音訊中斷。
-* `dim7` 的 CAGED 和弦 voicing 目前先沿用 diminished triad；未來若需要完整減七和弦按法，可新增專屬 `dim7` voicing。
+* 目前和弦庫沒有提供 `vii°7`（減七和弦）字卡，`vii°` 只以減三和弦（`dim`）形式存在。
+* `CHORD_LABEL_TO_QUALITY` 與 `CAGED_CHORD_VOICINGS` 已預留 `dim7`（沿用 diminished triad 按法），供未來新增減七和弦字卡時直接使用，目前尚未有任何和弦使用此 label。
 
 ---
 
@@ -144,3 +155,7 @@
 * CAGED cycle 修正為依可用把位中心點排序後向高把位推進，不是固定 `C → A → G → E → D` 字面順序。
 * Stage 規則補上 `dom` 視為 major、`dim` 專用 Stage、Stage 4 的實際音程清單與調式過濾邏輯。
 * 補充 `localStorage` 設定保存、靜態 35 個 CAGED scale shape、資料定義式 CAGED voicing、訓練畫面無暫停 / 恢復按鈕等實作現況。
+* 和弦庫由三大類修正為七大類，補上同主調三和弦 / 同主調七和弦 / 副屬七和弦 / 關聯 II / 裏和弦（SubV7）。
+* 階梯解鎖規則修正為 `chord`（Stage 1-5：Triad → 7th / 9th / 11th / 13th）與 `scale`（Stage 1-3：Triad → Pentatonic → Mode Scale）雙模式，取代原本單一 Stage 1-5 描述；Stage 上限依模式各自為 5 與 3。
+* 補充訓練畫面「音程顯示基準」（從 Chord / 從 Key）切換功能，並列入 `localStorage` 保存項目。
+* 移除 `vii°7` 已實作的錯誤描述；目前和弦庫沒有此字卡，`dim7` 僅為預留的 label / voicing，尚未被任何和弦使用。
