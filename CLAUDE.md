@@ -17,6 +17,8 @@ npm run preview  # Preview the built dist/ locally
 
 There is **no test runner, linter, or type checker** configured. Validation is manual in the browser. Deployment is automatic: pushing to `main` triggers `.github/workflows/deploy.yml` (GitHub Pages). `vite.config.js` sets `base: './'` (relative paths) — keep it relative so the Pages sub-path resolves.
 
+**Do NOT run `npm run build`, `npm run dev`, `npm run preview`, or otherwise build/run the app.** The user builds and runs it themselves. Just make the code changes and describe what to verify.
+
 ## Architecture
 
 Single-page Vue 3 app (Script Setup, no router, no store). All state lives in `src/App.vue`; three pure-logic engines under `src/utils/` do the music/audio work. Tailwind CSS v4 via the `@tailwindcss/vite` plugin (no `tailwind.config`; config lives in `src/style.css`).

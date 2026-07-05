@@ -105,6 +105,38 @@ const PLUCKED_SOUND_CONFIG = Object.freeze({
   cleanupExtraSeconds: 0.25
 });
 
+// ===============================
+// 節拍器 Click 音色可調參數（木魚 / woodblock 風）
+// ===============================
+// 背景：舊版是「三角波 + 白噪 transient」，白噪讓 click 聽起來廉價、電子感重。
+// 這裡改成無噪音的合成木魚：起音瞬間讓音高快速下掉（pitch drop）做出「叩」的
+// 敲擊感，再疊一個很短的高頻 knock 泛音強化木頭質感。整體是溫暖自然的「トッ」。
+// 調整建議：
+// 1. 想更響／更容易聽到：提高 bodyGainScale。
+// 2. 想更「硬、更像敲木頭」：提高 pitchStartRatio、knockGain。
+// 3. 想更「圓、更悶」：降低 pitchStartRatio、knockGain，或縮短 knockDecaySeconds。
+// 4. 想更長的木魚餘韻：加大 decaySeconds（不要超過 0.12）。
+const METRONOME_CLICK_CONFIG = Object.freeze({
+  // 整體音量倍率（乘在呼叫端傳入的 volume 上）。
+  bodyGainScale: 1.6,
+
+  // 起音瞬間的音高上衝比例：頻率從 frequency * pitchStartRatio 在 pitchDropSeconds
+  // 內快速掉回 frequency。這個下掉就是木魚「叩」的敲擊感來源。
+  pitchStartRatio: 1.6,
+  pitchDropSeconds: 0.008,
+
+  // 起音爬升時間。極短即可，用來避免瞬間跳變產生的爆音 (pop)。
+  attackSeconds: 0.001,
+
+  // 本體衰減長度。越短越乾、越像小木魚；越長餘韻越多。
+  decaySeconds: 0.06,
+
+  // 高頻 knock 泛音：很短、非整數倍（inharmonic），強化木頭敲擊質感。
+  knockRatio: 3.2,
+  knockGain: 0.4,
+  knockDecaySeconds: 0.028
+});
+
 export class AudioEngine {
   constructor() {
     this.audioCtx = null;
@@ -330,18 +362,49 @@ export class AudioEngine {
   }
 
   scheduleMetronomeClick(time, frequency, volume = 0.08, duration = 0.06) {
-    const osc = this.audioCtx.createOscillator();
-    const gainNode = this.audioCtx.createGain();
+    const cfg = METRONOME_CLICK_CONFIG;
+    const decay = Math.min(Math.max(duration, cfg.decaySeconds), 0.12);
+    const bodyPeak = Math.max(0.0001, volume * cfg.bodyGainScale);
 
-    osc.connect(gainNode);
-    gainNode.connect(this.audioCtx.destination);
+    // --- 本體：起音瞬間音高快速下掉，做出木魚「叩」的敲擊感 ---
+    const bodyGain = this.audioCtx.createGain();
+    bodyGain.connect(this.audioCtx.destination);
 
-    osc.frequency.value = frequency;
-    gainNode.gain.setValueAtTime(volume, time);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, time + Math.min(duration, 0.08));
+    const osc1 = this.audioCtx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(frequency * cfg.pitchStartRatio, time);
+    osc1.frequency.exponentialRampToValueAtTime(
+      frequency,
+      time + cfg.pitchDropSeconds
+    );
+    osc1.connect(bodyGain);
 
-    osc.start(time);
-    osc.stop(time + duration);
+    // 極短起音（避免爆音）+ 快速衰減。
+    bodyGain.gain.setValueAtTime(0.0001, time);
+    bodyGain.gain.linearRampToValueAtTime(bodyPeak, time + cfg.attackSeconds);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+
+    osc1.start(time);
+    osc1.stop(time + decay);
+
+    // --- 高頻 knock 泛音：很短的 inharmonic 敲擊，強化木頭質感 ---
+    const knock = this.audioCtx.createOscillator();
+    knock.type = 'sine';
+    knock.frequency.value = frequency * cfg.knockRatio;
+
+    const knockGain = this.audioCtx.createGain();
+    const knockPeak = Math.max(0.0001, bodyPeak * cfg.knockGain);
+    knockGain.gain.setValueAtTime(knockPeak, time);
+    knockGain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      time + cfg.knockDecaySeconds
+    );
+
+    knock.connect(knockGain);
+    knockGain.connect(this.audioCtx.destination);
+
+    knock.start(time);
+    knock.stop(time + cfg.knockDecaySeconds);
   }
 
   scheduleNote(globalBeat, time) {
@@ -351,7 +414,7 @@ export class AudioEngine {
       const introLocalBeat = 4 - this.introBeatsRemaining; // 0..3
 
       // 導入預告期維持高音 Click。
-      this.scheduleMetronomeClick(time, 587.33, 0.08, 0.06);
+      this.scheduleMetronomeClick(time, 587.33, 0.11, 0.06);
 
       // 導入預告期：僅同步觸發 Vue 渲染。
       if (this.onBeatTrigger) {
@@ -506,7 +569,7 @@ export class AudioEngine {
     } else if (phase === 'predict') {
       // 【預告期】播放高音 Click 輔助下一個和弦預告。
       // 注意：training phase 不會播放這個 Click。
-      this.scheduleMetronomeClick(time, 587.33, 0.08, 0.06);
+      this.scheduleMetronomeClick(time, 587.33, 0.11, 0.06);
     }
 
     // 觸發 Vue 渲染。
