@@ -64,15 +64,17 @@
    * **三和弦琶音（Triad Practice，`triad`）**：在選定的「連續三弦組」上，用三和弦彈奏上方的和弦進行；不使用 CAGED 音階型，而是為整組進行即時計算三和弦轉回形。
      * **可選弦組**：`1-3`、`2-4`、`3-5`、`4-6`（吉他弦號，`1` 為最細弦）。四選一，`TRIAD_STRING_SETS` 定義各組低音弦→高音弦的排列。
      * **轉回形自動決定（Voice Leading）**：對進行中每個和弦，依和弦性質（Major/Dominant 取 `1,3,5`、Minor 取 `1,b3,5`、Diminished 取 `1,b3,b5`）算出三個構成音，於選定三弦上枚舉三個轉回形（低音為 root / 3rd / 5th）與不同八度落點，再以貪婪法選出「與前一個和弦同弦位琴格移動量總和最小」的轉回形。結果是整輪進行的三和弦集中在同一把位、只切換轉回形（位置相近），而非到處跳。
+     * **避免連續同轉回形**：計分時對「與前一個和弦相同的轉回形」加上柔性懲罰（`SAME_INVERSION_PENALTY`，目前為 4，以琴格移動量為單位），盡量不要在進行中連續使用同一個轉回形。這是「盡量」而非硬性限制：若同轉回形的把位明顯更近（差距大於懲罰值，例如同一個和弦連續出現時），仍會沿用同轉回形。一般不同和弦的進行下，相鄰和弦幾乎都會落在不同轉回形。
      * **排除誇張跨度**：枚舉候選時會先排除琴格跨度過大（超過 `MAX_TRIAD_SPAN`，目前為 5 格）的 voicing，避免出現「低音壓開放弦、高音卻在第 9~10 格」這類實際按不出來的極端指型，改用其它轉回形；若某和弦所有候選都過大（極少見）才退回原始候選。
      * **把位階梯推進**：每一輪進行的錨點（第一個和弦）會依把位由低到高排成階梯，第 `cycle` 輪取第 `cycle` 個（循環）；因此每完成一輪整組把位就往高處推進，與 CAGED 自動循環的體驗一致。
-     * **播放行為**：Prep 刷選定三弦的三和弦（低音弦→高音弦），且會**隨進行中每個和弦即時切換**；Train 依低音到高音逐拍爬升三個構成音；Predict 提前導航至下一輪（更高把位）的三和弦把位。此模式沿用和弦進行（內建或自訂）。爬音與刷弦皆由音訊引擎依 `currentChordIdx` / `currentCagedCycle` 即時計算，與排程器同步。
+     * **爬音方向（上升 / 下降）**：可在模式選擇區另外選擇 Train 的爬音方向（`selectedTriadDirection`：`ascending` 低音→高音，預設 / `descending` 高音→低音）。方向只影響 Train 三個構成音的播放與點亮順序（依 `pitchScore` 昇冪或降冪），不影響轉回形挑選與 Prep 刷弦。此設定會保存於 `localStorage`。
+     * **播放行為**：Prep 刷選定三弦的三和弦（低音弦→高音弦），且會**隨進行中每個和弦即時切換**；Train 依所選方向（上升 低→高 / 下降 高→低）逐拍彈奏三個構成音；Predict 提前導航至下一輪（更高把位）的三和弦把位。此模式沿用和弦進行（內建或自訂）。爬音與刷弦皆由音訊引擎依 `currentChordIdx` / `currentCagedCycle` 即時計算，與排程器同步。
 7. **把位自動循環（Dynamic CAGED Auto-Cycling）**：
    * 系統依和弦根音計算 C / A / G / E / D 五種 CAGED 型的可用把位區間，只保留位於 0–15 格範圍內且根音不超過 14 格的型。
    * 可用型會依把位中心點由低到高排序；第 0 輪會選擇最接近琴首低把位（中心約第 2 格）的型。
    * 每完成一整輪和弦進行，CAGED cycle 增加 1，下一輪會使用排序後的下一個可用高把位；不是固定以 `C → A → G → E → D` 的字面順序循環。
 8. **設定保存與復原**：
-   * 保存項目包含：主調、內建進行名稱、自訂進行、是否使用自訂進行、BPM、音程特訓模式（`chord` / `scale`）、Stage、左右手模式、指板音程顯示基準（`chord` / `key`）、音序引擎（`trainingInputMode`：`stage` / `custom` / `triad`）、三和弦弦組（`selectedTriadStringSet`）、自訂音序文字。
+   * 保存項目包含：主調、內建進行名稱、自訂進行、是否使用自訂進行、BPM、音程特訓模式（`chord` / `scale`）、Stage、左右手模式、指板音程顯示基準（`chord` / `key`）、音序引擎（`trainingInputMode`：`stage` / `custom` / `triad`）、三和弦弦組（`selectedTriadStringSet`）、三和弦爬音方向（`selectedTriadDirection`：`ascending` / `descending`）、自訂音序文字。
    * 若保存資料格式錯誤或包含不存在的和弦，系統會過濾或回退預設值，不中斷訓練功能；Stage 上限也會依保存的音程特訓模式（`chord`=5 / `scale`=3）重新夾範圍。
    * **後方相容**：舊版只保存 `isCustomSequenceMode`（布林）而無 `trainingInputMode` 欄位時，`true` 會遷移為 `custom`、`false` 遷移為 `stage`；未知的三弦組值會回退為預設 `2-4`。
 
@@ -173,3 +175,5 @@
 * CAGED scale shape 由手寫改為演算法生成（僅手寫各 form 幾何 `CAGED_FORM_GEOMETRY`），並保證同音異弦為零。
 * 7th 和弦（`maj7` / `m7` / `7` / `m7♭5`）的 CAGED voicing 統一為「每個 form 單一按法」（依指板圖），移除 `omit5` / `shell` 等替代 voicing；同時修正 `maj7` / `m7` / `m7♭5` 的 G 型被誤寫成 E 型指型的資料錯誤。
 * `dim` / `dim7` 也改為每個 CAGED 型單一按法（`dim7` 依指板圖、`dim` 由 `dim7` 去掉 6th 推得），並解除 `dim7 = dim` 的 alias 使兩者成為獨立資料。
+* 三和弦琶音的轉回形挑選加入「盡量不連續使用同一轉回形」的柔性懲罰（`SAME_INVERSION_PENALTY`）。
+* 三和弦琶音新增「爬音方向」選項（`selectedTriadDirection`：上升 `ascending` / 下降 `descending`），並列入 `localStorage` 保存項目。

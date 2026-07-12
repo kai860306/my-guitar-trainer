@@ -58,6 +58,10 @@ const TRAINING_INPUT_MODES = ['stage', 'custom', 'triad'];
 const TRIAD_STRING_SET_KEYS = Object.keys(TRIAD_STRING_SETS);
 const DEFAULT_TRIAD_STRING_SET = '2-4';
 
+// 三和弦 Train 爬音方向。ascending = 低音→高音；descending = 高音→低音。
+const TRIAD_DIRECTIONS = ['ascending', 'descending'];
+const DEFAULT_TRIAD_DIRECTION = 'ascending';
+
 // 畫面初始顯示用。
 // 若之後有保存設定，onMounted 時會依照保存的和弦進行重新覆蓋。
 const currentChord = ref('I');
@@ -122,6 +126,9 @@ const customSequenceArray = ref(createSequenceCards());
 // 三和弦模式選擇的連續三弦組。
 const selectedTriadStringSet = ref(DEFAULT_TRIAD_STRING_SET);
 
+// 三和弦模式的爬音方向（'ascending' | 'descending'）。
+const selectedTriadDirection = ref(DEFAULT_TRIAD_DIRECTION);
+
 // 運行與 UI 切換狀態
 const isTrainingActive = ref(false); // 點擊 Start 切換至極簡運動 UI
 const isPlaying = ref(false);
@@ -164,6 +171,7 @@ const getDefaultSettings = () => ({
   intervalDisplayMode: DEFAULT_INTERVAL_DISPLAY_MODE,
   trainingInputMode: DEFAULT_TRAINING_INPUT_MODE,
   selectedTriadStringSet: DEFAULT_TRIAD_STRING_SET,
+  selectedTriadDirection: DEFAULT_TRIAD_DIRECTION,
   customSequenceArray: createSequenceCards()
 });
 
@@ -231,6 +239,10 @@ const applySettingsToState = (settings) => {
     ? safeSettings.selectedTriadStringSet
     : defaults.selectedTriadStringSet;
 
+  selectedTriadDirection.value = TRIAD_DIRECTIONS.includes(safeSettings.selectedTriadDirection)
+    ? safeSettings.selectedTriadDirection
+    : defaults.selectedTriadDirection;
+
   customSequenceArray.value = Array.isArray(safeSettings.customSequenceArray)
     ? safeSettings.customSequenceArray
         .filter(item => item && typeof item.value === 'string' && isValidSequenceToken(item.value))
@@ -276,6 +288,7 @@ const saveSettings = () => {
       intervalDisplayMode: intervalDisplayMode.value,
       trainingInputMode: trainingInputMode.value,
       selectedTriadStringSet: selectedTriadStringSet.value,
+      selectedTriadDirection: selectedTriadDirection.value,
       customSequenceArray: customSequenceArray.value
     };
 
@@ -723,7 +736,8 @@ const syncEngineParams = () => {
       : 0;
     const notes = voicings[safeIdx]?.notes || [];
     prepVoicingNotes = notes;
-    cagedSeq = [...notes].sort((a, b) => a.pitchScore - b.pitchScore);
+    const descending = selectedTriadDirection.value === 'descending';
+    cagedSeq = [...notes].sort((a, b) => descending ? b.pitchScore - a.pitchScore : a.pitchScore - b.pitchScore);
   } else {
     // 生成當前自動爬音序列
     const activeChord = isPlaying.value ? currentChord.value : progArray[0];
@@ -755,7 +769,8 @@ const syncEngineParams = () => {
     prepVoicingNotes,
     cagedCycle.value,
     triadMode,
-    selectedTriadStringSet.value
+    selectedTriadStringSet.value,
+    selectedTriadDirection.value
   );
 };
 
@@ -775,6 +790,7 @@ watch([
   intervalDisplayMode,
   trainingInputMode,
   selectedTriadStringSet,
+  selectedTriadDirection,
   customSequenceArray
 ], () => {
   saveSettings();
@@ -1115,8 +1131,26 @@ const exitTraining = () => {
             </button>
           </div>
 
+          <div class="text-[0.7rem] font-bold text-zinc-500 tracking-wide uppercase">爬音方向</div>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              @click="selectedTriadDirection = 'ascending'"
+              class="py-3 rounded-xl border font-bold text-sm transition-all"
+              :class="selectedTriadDirection === 'ascending' ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+            >
+              上升 ↑（低→高）
+            </button>
+            <button
+              @click="selectedTriadDirection = 'descending'"
+              class="py-3 rounded-xl border font-bold text-sm transition-all"
+              :class="selectedTriadDirection === 'descending' ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+            >
+              下降 ↓（高→低）
+            </button>
+          </div>
+
           <p class="text-xs text-zinc-500 text-center leading-relaxed">
-            🎸 在選定的相鄰三弦上，用三和弦（Triad）彈奏上方的和弦進行。後台會依和弦性質（大 / 小 / 減）自動挑選轉回形，讓每次換和弦的<span class="text-zinc-300">琴格移動量最小</span>（Voice Leading）。Prep 刷三和弦，Train 依低音到高音逐音爬升。
+            🎸 在選定的相鄰三弦上，用三和弦（Triad）彈奏上方的和弦進行。後台會依和弦性質（大 / 小 / 減）自動挑選轉回形，讓每次換和弦的<span class="text-zinc-300">琴格移動量最小</span>（Voice Leading）。Prep 刷三和弦，Train 依所選方向（上升 低→高 / 下降 高→低）逐音爬升。
           </p>
         </div>
       </div>

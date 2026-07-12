@@ -637,6 +637,12 @@ const TRIAD_INTERVALS_BY_FAMILY = {
 // （例如低音開放弦 + 高音第 9~10 格），改用其它轉回形。
 const MAX_TRIAD_SPAN = 5;
 
+// 進行中「盡量不要連續使用同一個轉回形」的柔性懲罰（以琴格移動量為單位）。
+// 加在 voice leading 分數上：若候選的轉回形與前一個和弦相同就加此值，
+// 使演算法偏好換轉回形；但若同轉回形的把位明顯更近（差距大於此值）仍會沿用，
+// 因此是「盡量」而非硬性限制。數值越大越傾向每個和弦都換轉回形。
+const SAME_INVERSION_PENALTY = 4;
+
 const triadAbsPitch = (stringIndex, fret) => TRIAD_STRING_PITCH_SCORES[stringIndex] + fret;
 
 // 在指定弦上，找出音高等級為 pc 且絕對音高 > thresholdAbs 的最小琴格。
@@ -703,6 +709,7 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
 
   const result = [];
   let prevNotes = null;
+  let prevInv = null; // 前一個和弦採用的轉回形（0=root / 1=3rd / 2=5th 在低音）。
 
   for (const degree of progressionArray || []) {
     const chordConfig = CHORD_MODES[degree];
@@ -722,6 +729,7 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
     }));
 
     // 3 個轉回形（低音是 root / 3rd / 5th）× 每個轉回形取兩個八度落點作為候選。
+    // 每個候選記住自己的轉回形 inv，供「避免連續同轉回形」的懲罰使用。
     const candidates = [];
     for (let inv = 0; inv < 3; inv++) {
       const invTones = [tones[inv % 3], tones[(inv + 1) % 3], tones[(inv + 2) % 3]];
@@ -729,7 +737,7 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
       for (const bassMinFret of [bassBase, bassBase + 12]) {
         if (bassMinFret > maxFret) continue;
         const notes = buildTriadVoicing(invTones, strings, bassMinFret, chordRootAbs, maxFret);
-        if (notes) candidates.push(notes);
+        if (notes) candidates.push({ notes, inv });
       }
     }
 
@@ -740,7 +748,7 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
 
     // 先排除跨度過大的誇張 voicing；若全部都過大（極少見）才退回原始候選，避免產生空和弦。
     const spanOf = (notes) => Math.max(...notes.map(n => n.fret)) - Math.min(...notes.map(n => n.fret));
-    const compact = candidates.filter(notes => spanOf(notes) <= MAX_TRIAD_SPAN);
+    const compact = candidates.filter(cand => spanOf(cand.notes) <= MAX_TRIAD_SPAN);
     const pool = compact.length > 0 ? compact : candidates;
 
     let best;
@@ -748,22 +756,23 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
       // 本輪的錨點和弦：候選依把位由低到高排成階梯，取第 cycle 個（循環），
       // 讓每完成一輪進行就往高把位推進，行為與 CAGED 自動循環一致。
       const ladder = [...pool].sort((a, b) => {
-        const aMin = Math.min(...a.map(n => n.fret));
-        const bMin = Math.min(...b.map(n => n.fret));
+        const aMin = Math.min(...a.notes.map(n => n.fret));
+        const bMin = Math.min(...b.notes.map(n => n.fret));
         if (aMin !== bMin) return aMin - bMin;
-        const aSum = a.reduce((s, n) => s + n.fret, 0);
-        const bSum = b.reduce((s, n) => s + n.fret, 0);
+        const aSum = a.notes.reduce((s, n) => s + n.fret, 0);
+        const bSum = b.notes.reduce((s, n) => s + n.fret, 0);
         return aSum - bSum;
       });
       best = ladder[((cycle % ladder.length) + ladder.length) % ladder.length];
     } else {
       // 後續和弦：與前一個和弦同弦位的琴格移動總和最小 + 些微跨度懲罰，
-      // 使整輪的三和弦集中在同一把位、只換轉回形。
+      // 並對「與前一個和弦相同的轉回形」加上柔性懲罰，盡量不要連續用同一個轉回形。
       let bestScore = Infinity;
       for (const cand of pool) {
-        const move = cand.reduce((sum, n, i) => sum + Math.abs(n.fret - prevNotes[i].fret), 0);
-        const span = spanOf(cand);
-        const score = move + span * 0.25;
+        const move = cand.notes.reduce((sum, n, i) => sum + Math.abs(n.fret - prevNotes[i].fret), 0);
+        const span = spanOf(cand.notes);
+        const sameInversionPenalty = cand.inv === prevInv ? SAME_INVERSION_PENALTY : 0;
+        const score = move + span * 0.25 + sameInversionPenalty;
         if (score < bestScore) {
           bestScore = score;
           best = cand;
@@ -771,8 +780,9 @@ export function generateTriadProgressionVoicings(keyRoot, progressionArray, stri
       }
     }
 
-    result.push({ degree, notes: best });
-    prevNotes = best;
+    result.push({ degree, notes: best.notes });
+    prevNotes = best.notes;
+    prevInv = best.inv;
   }
 
   return result;

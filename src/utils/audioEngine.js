@@ -189,7 +189,8 @@ export class AudioEngine {
     prepChordVoicingNotes = [],
     cagedCycle = null,
     triadMode = false,
-    triadStringSet = '2-4'
+    triadStringSet = '2-4',
+    triadDirection = 'ascending'
   ) {
     this.progression = prog;
     this.stage = stage;
@@ -203,6 +204,7 @@ export class AudioEngine {
     //            即時計算（getLiveTriadVoicings），避免 Vue 回呼落後造成刷弦停在第一個和弦。
     this.triadMode = triadMode;
     this.triadStringSet = triadStringSet;
+    this.triadDirection = triadDirection; // 'ascending'（低→高）| 'descending'（高→低）
     this._triadCacheKey = null; // 參數變更後讓三和弦快取失效。
 
     // 播放中由排程器自己推進 CAGED cycle，避免 lookahead 回呼造成第一拍和弦提示落後。
@@ -539,9 +541,10 @@ export class AudioEngine {
           activeNoteTarget = { type: 'custom', token, trainIndex };
         }
       } else if (this.triadMode) {
-        // 即時取當前三和弦，依音高由低到高排序後逐拍爬升。
+        // 即時取當前三和弦，依方向逐拍爬升（ascending＝低→高）或下降（descending＝高→低）。
+        const descending = this.triadDirection === 'descending';
         const triadNotes = [...(this.getLiveTriadVoicings(this.currentCagedCycle)[this.currentChordIdx]?.notes || [])]
-          .sort((a, b) => a.pitchScore - b.pitchScore);
+          .sort((a, b) => descending ? b.pitchScore - a.pitchScore : a.pitchScore - b.pitchScore);
         if (trainIndex < triadNotes.length) {
           noteObj = triadNotes[trainIndex];
         }
