@@ -69,7 +69,8 @@ const nextChord = ref('IV');
 
 // 基礎設定狀態
 const keyRoot = ref(DEFAULT_KEY_ROOT);
-const selectedProgressionName = ref(DEFAULT_PROGRESSION_NAME);
+// 目前選取的進行 id（內建 seed 為 'preset:<名稱>'，自訂為隨機碼）。onMounted 會依保存設定覆蓋。
+const selectedProgressionName = ref('preset:' + DEFAULT_PROGRESSION_NAME);
 const selectedTrainingStageMode = ref(DEFAULT_TRAINING_STAGE_MODE);
 const selectedStage = ref(DEFAULT_STAGE);
 
@@ -87,6 +88,36 @@ const chordLibrary = [
 ];
 const activeGap = ref(null);
 const isCustomProgMode = ref(false);
+
+// 選擇清單的「管理模式」：開啟時卡片顯示大顆的編輯 / 刪除按鈕。不需持久化。
+const isManagingProgList = ref(false);
+
+// 和弦進行清單（內建與自訂統一管理）。每筆結構：{ id, name, chords: ['I','IV','V'] }
+//   - id     : 選取用 key。內建 seed 項目用穩定字串 'preset:<名稱>'；使用者新增用 generateId() 隨機碼。
+//   - name   : 由 chords 自動產生的顯示名稱（如 'I - IV - vi'）。
+//   - chords : 羅馬級數 token 陣列，皆為 CHORD_MODES 的 key。
+// 內建 PROGRESSION_PRESETS 只作為「第一次載入」的 seed 來源；seed 後清單完全由使用者管理（可選/可編/可刪）。
+const savedProgressions = ref([]);
+
+// 內建進行 seed 的預設選取 id。
+const DEFAULT_PROGRESSION_ID = 'preset:' + DEFAULT_PROGRESSION_NAME;
+
+// 目前正在「重新編輯」的進行 id；null 代表 builder 內容尚未對應任何一筆（存檔時視為新增）。
+const editingProgId = ref(null);
+
+// 由內建 preset 產生 seed 清單（每個 preset 一筆，id 用穩定字串）。
+const seedProgressions = () =>
+  Object.entries(PROGRESSION_PRESETS).map(([name, chords]) => ({
+    id: 'preset:' + name,
+    name,
+    chords: [...chords]
+  }));
+
+// 依 chords 自動產生顯示名稱（以 ' - ' 相連）。去重已保證相同 chords 不會重覆存入，故不需後綴。
+const progName = (chords) => chords.join(' - ') || 'Empty';
+
+// 兩組級數是否完全相同（長度與逐項）。
+const sameChords = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 // 自訂音序器預設值與可用音程字卡。
 // 這裡沿用原本手輸入音序器的 token 規則：1-7 是順階度數，L1-L7 是低八度順階度數。
@@ -161,9 +192,8 @@ const SETTINGS_STORAGE_KEY = 'caged-guitar-trainer-settings-v1';
 
 const getDefaultSettings = () => ({
   keyRoot: DEFAULT_KEY_ROOT,
-  selectedProgressionName: DEFAULT_PROGRESSION_NAME,
-  customProgressionArray: [],
-  isCustomProgMode: false,
+  selectedProgressionName: DEFAULT_PROGRESSION_ID,
+  savedProgressions: seedProgressions(),
   bpm: DEFAULT_BPM,
   selectedTrainingStageMode: DEFAULT_TRAINING_STAGE_MODE,
   selectedStage: DEFAULT_STAGE,
@@ -186,25 +216,49 @@ const applySettingsToState = (settings) => {
     ? Math.min(11, Math.max(0, safeSettings.keyRoot))
     : defaults.keyRoot;
 
-  selectedProgressionName.value = PROGRESSION_PRESETS[safeSettings.selectedProgressionName]
-    ? safeSettings.selectedProgressionName
-    : defaults.selectedProgressionName;
+  // 先還原進行清單，selectedProgressionName 的驗證才能認得清單裡的 id。
+  // 逐筆驗證：chords 非空且皆為存在的級數；id / name 缺則補上。
+  const validateProgList = (list) => list
+    .filter(p => p && Array.isArray(p.chords) && p.chords.length > 0
+      && p.chords.every(c => typeof c === 'string' && CHORD_MODES[c]))
+    .map(p => ({
+      id: typeof p.id === 'string' && p.id ? p.id : generateId(),
+      chords: [...p.chords],
+      name: typeof p.name === 'string' && p.name ? p.name : progName(p.chords)
+    }));
 
-  customProgressionArray.value = Array.isArray(safeSettings.customProgressionArray)
-    ? safeSettings.customProgressionArray
-        .filter(item => item && typeof item.value === 'string' && CHORD_MODES[item.value])
-        .map(item => ({
-          id: typeof item.id === 'string' ? item.id : generateId(),
-          value: item.value
-        }))
-    : defaults.customProgressionArray;
-
-  isCustomProgMode.value = Boolean(safeSettings.isCustomProgMode);
-
-  // 自訂進行模式但沒有任何和弦時，避免訓練變成空進行。
-  if (isCustomProgMode.value && customProgressionArray.value.length === 0) {
-    isCustomProgMode.value = false;
+  if (Array.isArray(safeSettings.savedProgressions)) {
+    // 有新版欄位：直接採用（即使過濾後為空，也尊重使用者把清單刪光）。
+    savedProgressions.value = validateProgList(safeSettings.savedProgressions);
+  } else {
+    // 首次載入 / v1 舊資料遷移：seed 內建 + 併入舊 userProgressions（隨機 id）。
+    const legacy = Array.isArray(safeSettings.userProgressions)
+      ? validateProgList(safeSettings.userProgressions).map(p => ({ ...p, id: generateId() }))
+      : [];
+    savedProgressions.value = [...seedProgressions(), ...legacy];
   }
+
+  // 選取遷移：命中 id 直接用；否則命中 v1 的 preset 名稱 → 映射 'preset:名稱'；
+  // 再否則回退預設 id；若連預設 id 都不存在（被刪光）→ 取剩餘第一筆。
+  const savedProgIds = new Set(savedProgressions.value.map(p => p.id));
+  const wanted = safeSettings.selectedProgressionName;
+  let resolvedProgId = null;
+  if (savedProgIds.has(wanted)) {
+    resolvedProgId = wanted;
+  } else if (PROGRESSION_PRESETS[wanted] && savedProgIds.has('preset:' + wanted)) {
+    resolvedProgId = 'preset:' + wanted;
+  }
+  if (!resolvedProgId) {
+    resolvedProgId = savedProgIds.has(DEFAULT_PROGRESSION_ID)
+      ? DEFAULT_PROGRESSION_ID
+      : (savedProgressions.value[0]?.id || DEFAULT_PROGRESSION_ID);
+  }
+  selectedProgressionName.value = resolvedProgId;
+
+  // builder 為暫時的編輯子頁，不從保存還原：重整後一律停在和弦清單、不保留半成品。
+  isCustomProgMode.value = false;
+  editingProgId.value = null;
+  customProgressionArray.value = [];
 
   bpm.value = Number.isFinite(Number(safeSettings.bpm))
     ? Math.min(MAX_BPM, Math.max(MIN_BPM, Number(safeSettings.bpm)))
@@ -279,8 +333,7 @@ const saveSettings = () => {
     const settings = {
       keyRoot: keyRoot.value,
       selectedProgressionName: selectedProgressionName.value,
-      customProgressionArray: customProgressionArray.value,
-      isCustomProgMode: isCustomProgMode.value,
+      savedProgressions: savedProgressions.value,
       bpm: bpm.value,
       selectedTrainingStageMode: selectedTrainingStageMode.value,
       selectedStage: selectedStage.value,
@@ -353,14 +406,24 @@ const toggleFullscreen = async () => {
   }
 };
 
-// 解析和弦進行級數
+// 清單「id → 級數陣列」查找表。
+const allProgressions = computed(() => {
+  const map = {};
+  savedProgressions.value.forEach(p => { map[p.id] = p.chords; });
+  return map;
+});
+
+// 「選擇清單」按鈕格要顯示的項目。
+const progressionListEntries = computed(() =>
+  savedProgressions.value.map(p => ({ key: p.id, name: p.name }))
+);
+
+// 解析和弦進行級數。
+// 訓練一律使用「和弦清單中選中的那筆」；builder（customProgressionArray）只是編輯緩衝，不直接播放。
 const getActiveProgression = () => {
-  if (!isCustomProgMode.value) {
-    return PROGRESSION_PRESETS[selectedProgressionName.value];
-  }
-  return customProgressionArray.value.length > 0 
-    ? customProgressionArray.value.map(c => typeof c === 'string' ? c : c.value) 
-    : ['I'];
+  return allProgressions.value[selectedProgressionName.value]
+    || savedProgressions.value[0]?.chords
+    || ['I'];
 };
 
 // 依指針位置計算插入縫隙索引
@@ -529,6 +592,69 @@ const addChord = (chordValue) => {
 const removeChord = (index) => {
   customProgressionArray.value.splice(index, 1);
   syncEngineParams();
+};
+
+// 開啟 builder 子頁建立新進行（由「＋ 新增進行」仮卡片觸發）。
+const openNewProg = () => {
+  customProgressionArray.value = [];
+  editingProgId.value = null;
+  isCustomProgMode.value = true;
+};
+
+// 取消 / 破棄 builder 編輯，回到清單（不寫入 savedProgressions，故編輯既有筆時原資料不變）。
+const cancelProgEdit = () => {
+  isCustomProgMode.value = false;
+  editingProgId.value = null;
+  customProgressionArray.value = [];
+};
+
+// 把目前 builder 內容「保存」為新的一筆，或「更新」正在編輯的那筆。
+const saveCurrentProgToList = () => {
+  const chords = customProgressionArray.value.map(c => c.value);
+  if (chords.length === 0) return;
+
+  let savedId = editingProgId.value;
+  if (savedId) {
+    // 更新正在編輯的那筆。
+    const entry = savedProgressions.value.find(p => p.id === savedId);
+    if (entry) {
+      entry.chords = chords;
+      entry.name = progName(chords);
+    }
+  } else {
+    // 新增前先去重：清單中已有相同進行就不新增，直接選中既有那筆。
+    const dup = savedProgressions.value.find(p => sameChords(p.chords, chords));
+    if (dup) {
+      savedId = dup.id;
+    } else {
+      savedId = generateId();
+      savedProgressions.value.push({ id: savedId, name: progName(chords), chords });
+    }
+  }
+
+  // 存完切回清單並選中剛存 / 剛更新 / 既有的那筆，給即時回饋。
+  selectedProgressionName.value = savedId;
+  editingProgId.value = null;
+  isCustomProgMode.value = false;
+};
+
+// 把某筆進行載回 builder 重新編輯（內建 seed 項目同樣可編）。
+const editProg = (entry) => {
+  customProgressionArray.value = entry.chords.map(v => ({ id: generateId(), value: v }));
+  editingProgId.value = entry.id;
+  isCustomProgMode.value = true;
+};
+
+// 刪除某筆進行。
+const deleteProg = (id) => {
+  savedProgressions.value = savedProgressions.value.filter(p => p.id !== id);
+  if (selectedProgressionName.value === id) {
+    // 選中的被刪 → 跳到剩餘第一筆，沒有就回退預設 id。
+    selectedProgressionName.value = savedProgressions.value[0]?.id || DEFAULT_PROGRESSION_ID;
+  }
+  if (editingProgId.value === id) {
+    editingProgId.value = null;
+  }
 };
 
 const addSequenceToken = (tokenValue) => {
@@ -781,8 +907,7 @@ const syncEngineParams = () => {
 watch([
   keyRoot,
   selectedProgressionName,
-  customProgressionArray,
-  isCustomProgMode,
+  savedProgressions,
   bpm,
   selectedTrainingStageMode,
   selectedStage,
@@ -805,7 +930,9 @@ watch(cagedCycle, () => {
 // 啟動訓練
 const handleTogglePlay = () => {
   if (!trainerAudio) return;
-  
+  // builder 子頁開啟中、或清單為空時，不允許開始訓練。
+  if (isCustomProgMode.value || savedProgressions.value.length === 0) return;
+
   // 點擊開始時，直接切換到極簡運動佈局
   if (!isTrainingActive.value) {
     isTrainingActive.value = true;
@@ -948,22 +1075,58 @@ const exitTraining = () => {
 
       <div class="bg-zinc-900/40 p-5 rounded-2xl border border-zinc-800 space-y-4">
         <div class="flex justify-between items-center">
-          <h3 class="text-sm font-bold text-zinc-400 tracking-wide">2. 和弦進行 Progression</h3>
-          <div class="flex gap-2 text-xs">
-            <button @click="isCustomProgMode = false" class="px-3 py-1 rounded" :class="!isCustomProgMode ? 'bg-zinc-700 text-white' : 'text-zinc-500'">內建清單</button>
-            <button @click="isCustomProgMode = true" class="px-3 py-1 rounded" :class="isCustomProgMode ? 'bg-zinc-700 text-white' : 'text-zinc-500'">自由自訂</button>
+          <h3 class="text-sm font-bold text-zinc-400 tracking-wide">
+            2. 和弦進行 Progression
+            <span v-if="isCustomProgMode" class="text-emerald-400">— {{ editingProgId ? '編輯和弦進行' : '新增和弦進行' }}</span>
+          </h3>
+          <div v-if="!isCustomProgMode" class="flex gap-2 text-xs items-center">
+            <button @click="isManagingProgList = false" class="px-3 py-1 rounded" :class="!isManagingProgList ? 'bg-zinc-700 text-white' : 'text-zinc-500'">和弦清單</button>
+            <button @click="isManagingProgList = true" class="px-3 py-1 rounded" :class="isManagingProgList ? 'bg-zinc-700 text-white' : 'text-zinc-500'">管理</button>
           </div>
         </div>
-        
-        <div v-if="!isCustomProgMode" class="grid grid-cols-3 gap-3">
-          <button 
-            v-for="(_, name) in PROGRESSION_PRESETS" :key="name"
-            @click="selectedProgressionName = name"
-            class="p-4 rounded-xl font-bold text-center border transition-all text-sm"
-            :class="selectedProgressionName === name && !isCustomProgMode ? 'bg-zinc-200 text-black border-white' : 'bg-zinc-950 border-zinc-850 text-zinc-400'"
-          >
-            {{ name }}
-          </button>
+
+        <div v-if="!isCustomProgMode">
+          <!-- 管理分頁且清單為空時的提示 -->
+          <div v-if="isManagingProgList && progressionListEntries.length === 0" class="text-zinc-500 text-sm text-center py-6">
+            清單為空，請切到「和弦清單」按「＋ 新增進行」建立。
+          </div>
+          <div v-else class="grid grid-cols-3 gap-3">
+            <div
+              v-for="entry in progressionListEntries" :key="entry.key"
+              class="rounded-xl border border-zinc-800 transition-all overflow-hidden flex flex-col"
+              :class="selectedProgressionName === entry.key
+                ? 'bg-emerald-500 text-black shadow-lg'
+                : 'bg-zinc-950 text-zinc-400 hover:border-zinc-700'"
+            >
+              <button
+                @click="selectedProgressionName = entry.key"
+                class="flex-1 w-full p-4 font-bold text-center text-sm break-words cursor-pointer flex items-center justify-center"
+              >
+                {{ entry.name }}
+              </button>
+              <!-- 管理模式：大顆的編輯 / 刪除。綠色只在上方進行名稱，這條 bar 固定暗底 -->
+              <div v-if="isManagingProgList" class="flex border-t border-zinc-700 text-xs font-bold bg-zinc-950">
+                <button
+                  @click.stop="editProg(savedProgressions.find(p => p.id === entry.key))"
+                  class="flex-1 py-2 text-zinc-400 hover:bg-emerald-500/20 hover:text-emerald-400"
+                >編輯</button>
+                <button
+                  @click.stop="deleteProg(entry.key)"
+                  class="flex-1 py-2 border-l border-zinc-700 text-zinc-400 hover:bg-red-500/30 hover:text-red-400"
+                >刪除</button>
+              </div>
+            </div>
+
+            <!-- ＋ 新增進行 仮卡片（僅和弦清單分頁）：點擊切到 builder 子頁建立新進行 -->
+            <button
+              v-if="!isManagingProgList"
+              @click="openNewProg"
+              title="新增進行"
+              class="rounded-xl border border-dashed border-zinc-700 text-zinc-500 hover:border-emerald-500/60 hover:text-emerald-400 transition-all p-4 flex items-center justify-center min-h-[3.5rem]"
+            >
+              <span class="text-2xl leading-none">＋</span>
+            </button>
+          </div>
         </div>
         <div v-else class="space-y-3">
           <!-- 已選和弦 (Drop Zone) -->
@@ -992,7 +1155,24 @@ const exitTraining = () => {
               </div>
             </transition-group>
           </div>
-          
+
+          <!-- 保存 / 取消：回到和弦清單 -->
+          <div class="flex items-center gap-3">
+            <button
+              @click="saveCurrentProgToList"
+              :disabled="customProgressionArray.length === 0"
+              class="px-4 py-2 bg-emerald-500 border border-emerald-400 rounded-xl font-bold text-sm text-black hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              保存
+            </button>
+            <button
+              @click="cancelProgEdit"
+              class="px-4 py-2 bg-zinc-950 border border-zinc-800 rounded-xl font-bold text-sm text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 transition-colors"
+            >
+              取消
+            </button>
+          </div>
+
           <!-- 可用和弦庫 (依性質分類) -->
           <div class="space-y-3">
             <div v-for="group in chordLibrary" :key="group.label" class="space-y-1.5">
@@ -1016,9 +1196,13 @@ const exitTraining = () => {
       <div class="bg-zinc-900/40 p-5 rounded-2xl border border-zinc-800 flex flex-col justify-between">
         <h3 class="text-sm font-bold text-zinc-400 tracking-wide mb-2">3. 訓練速度 (BPM)</h3>
         <div class="flex items-center gap-4">
-          <button @click="bpm = Math.max(MIN_BPM, bpm - 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">-</button>
-          <div class="flex-1 text-center font-black text-3xl text-zinc-100">{{ bpm }} <span class="text-xs font-normal text-zinc-500">BPM</span></div>
-          <button @click="bpm = Math.min(MAX_BPM, bpm + 5)" class="w-12 h-12 bg-zinc-950 border border-zinc-800 rounded-xl font-black text-xl hover:border-zinc-700">+</button>
+          <input
+            type="range"
+            :min="MIN_BPM" :max="MAX_BPM" step="5"
+            v-model.number="bpm"
+            class="flex-1 h-2 accent-emerald-400 cursor-pointer"
+          />
+          <div class="w-24 text-right font-black text-3xl text-zinc-100 tabular-nums">{{ bpm }} <span class="text-xs font-normal text-zinc-500">BPM</span></div>
         </div>
       </div>
 
@@ -1039,7 +1223,7 @@ const exitTraining = () => {
               :key="modeKey"
               @click="setTrainingStageMode(modeKey)"
               class="p-3 rounded-xl border text-left transition-all"
-              :class="selectedTrainingStageMode === modeKey ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+              :class="selectedTrainingStageMode === modeKey ? 'bg-emerald-500 border-emerald-400 text-black shadow-lg' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'"
             >
               <div class="font-black text-sm">{{ modeConfig.label }}</div>
               <div class="text-[0.65rem] opacity-70 mt-1 leading-snug">{{ modeConfig.subtitle }}</div>
@@ -1052,7 +1236,7 @@ const exitTraining = () => {
               :key="selectedTrainingStageMode + '-stage-' + s"
               @click="selectedStage = s"
               class="py-3 rounded-xl border font-bold text-sm transition-all"
-              :class="selectedStage === s ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500'"
+              :class="selectedStage === s ? 'bg-emerald-500 border-emerald-400 text-black font-black shadow-lg' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'"
             >
               Stage {{ s }}
             </button>
@@ -1125,7 +1309,7 @@ const exitTraining = () => {
               :key="'triad-set-' + setKey"
               @click="selectedTriadStringSet = setKey"
               class="py-3 rounded-xl border font-bold text-sm transition-all"
-              :class="selectedTriadStringSet === setKey ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+              :class="selectedTriadStringSet === setKey ? 'bg-emerald-500 border-emerald-400 text-black font-black shadow-lg' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'"
             >
               {{ setKey }} 弦
             </button>
@@ -1136,14 +1320,14 @@ const exitTraining = () => {
             <button
               @click="selectedTriadDirection = 'ascending'"
               class="py-3 rounded-xl border font-bold text-sm transition-all"
-              :class="selectedTriadDirection === 'ascending' ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+              :class="selectedTriadDirection === 'ascending' ? 'bg-emerald-500 border-emerald-400 text-black font-black shadow-lg' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'"
             >
               上升 ↑（低→高）
             </button>
             <button
               @click="selectedTriadDirection = 'descending'"
               class="py-3 rounded-xl border font-bold text-sm transition-all"
-              :class="selectedTriadDirection === 'descending' ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-black' : 'bg-zinc-950 border-zinc-850 text-zinc-500 hover:border-zinc-700'"
+              :class="selectedTriadDirection === 'descending' ? 'bg-emerald-500 border-emerald-400 text-black font-black shadow-lg' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'"
             >
               下降 ↓（高→低）
             </button>
@@ -1157,11 +1341,14 @@ const exitTraining = () => {
 
 
 
-      <button 
+      <button
         @click="handleTogglePlay"
-        class="w-full py-5 bg-emerald-400 hover:bg-emerald-300 text-black font-black text-xl rounded-2xl transition-all active:scale-95 shadow-[0_4px_20px_rgba(52,211,153,0.3)] cursor-pointer text-center"
+        :disabled="isCustomProgMode || savedProgressions.length === 0"
+        class="w-full py-5 bg-emerald-400 hover:bg-emerald-300 text-black font-black text-xl rounded-2xl transition-all active:scale-95 shadow-[0_4px_20px_rgba(52,211,153,0.3)] cursor-pointer text-center disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
       >
-        進入有氧特訓模式 START 🚀
+        {{ isCustomProgMode ? '請先保存或取消編輯中的進行'
+          : savedProgressions.length === 0 ? '請先新增一組和弦進行'
+          : '進入有氧特訓模式 START 🚀' }}
       </button>
     </div>
 
