@@ -113,6 +113,7 @@
 3. **底部 / 控制列**：
    * 訓練畫面提供較小的「退出特訓」按鈕與目前把位文字提示（如 `目前把位：E 型`）。
    * **音程顯示基準切換**：提供「從 Chord」／「從 Key」二選一按鈕，即時切換指板音程顯示基準（`intervalDisplayMode`）：從 Chord 時音程數字相對於目前和弦根音（例如 V 和弦上 G 顯示 `1`）；從 Key 時音程數字相對於主調 Key 根音（例如 C Key 裡 G 顯示 `5`）。此設定會保存於 `localStorage`。
+   * **Key 根音定位點常駐顯示開關**：訓練畫面提供「■ Key 根音定位 ON / OFF」切換鈕（`showKeyRootMarkers`）。ON（預設）時主調根音以灰色正方形常駐顯示為定位基準；OFF 時這些正方形不再常駐，只在實際播放到（Train）或 Prep 和弦指型提示裡才出現，用來驗證是否真的背下把位。此設定會保存於 `localStorage`。
    * 目前實作沒有訓練畫面內的超大暫停 / 恢復鍵；暫停邏輯存在於音訊引擎 `toggle()`，但 UI 只有進入訓練前的開始按鈕與訓練中的退出按鈕。
 4. **安全區與不捲動版面**：
    * 訓練畫面使用 `100dvh`、`overflow: hidden` 與 iOS safe-area padding，目標是在 PC、iPad 橫屏與 iPhone 橫屏中不需上下捲動即可看到主要資訊。
@@ -181,6 +182,7 @@
 * 和弦庫由三大類修正為七大類，補上同主調三和弦 / 同主調七和弦 / 副屬七和弦 / 關聯 II / 裏和弦（SubV7）。
 * 階梯解鎖規則修正為 `chord`（Stage 1-5：Triad → 7th / 9th / 11th / 13th）與 `scale`（Stage 1-3：Triad → Pentatonic → Mode Scale）雙模式，取代原本單一 Stage 1-5 描述；Stage 上限依模式各自為 5 與 3。
 * 補充訓練畫面「音程顯示基準」（從 Chord / 從 Key）切換功能，並列入 `localStorage` 保存項目。
+* 新增訓練畫面「Key 根音定位點常駐顯示」ON / OFF 切換（`showKeyRootMarkers`），並列入 `localStorage` 保存項目。
 * 移除 `vii°7` 已實作的錯誤描述；目前和弦庫沒有此字卡，`dim7` 僅為預留的 label / voicing，尚未被任何和弦使用。
 * 新增第三種音序引擎「三和弦琶音」（`triad`）：在選定的連續三弦組（`1-3` / `2-4` / `3-5` / `4-6`）上，以最小琴格移動（Voice Leading）自動選出轉回形彈奏和弦進行。音序引擎切換由原本的布林 `isCustomSequenceMode` 改為三選一的 `trainingInputMode`（`stage` / `custom` / `triad`），並保存 `selectedTriadStringSet`，同時提供舊設定的後方相容遷移。
 * CAGED scale shape 由手寫改為演算法生成（僅手寫各 form 幾何 `CAGED_FORM_GEOMETRY`），並保證同音異弦為零。

@@ -47,6 +47,9 @@ const DEFAULT_IS_LEFT_HANDED = false;
 // key = 從目前 Key 根音看音程。
 const DEFAULT_INTERVAL_DISPLAY_MODE = 'chord';
 
+// 預設是否常駐顯示 Key 根音定位正方形。
+const DEFAULT_SHOW_KEY_ROOT_MARKERS = true;
+
 // 預設 Train phase 音生成引擎。
 // stage  = 階梯爬升解鎖（chord / scale 的 stageMode）
 // custom = 自訂音序器
@@ -150,6 +153,9 @@ const isLeftHanded = ref(DEFAULT_IS_LEFT_HANDED);
 // key：例如在 C Key 裡，G 會顯示 5。
 const intervalDisplayMode = ref(DEFAULT_INTERVAL_DISPLAY_MODE);
 
+// 指板上是否常駐顯示 Key 根音的灰色正方形定位點。
+const showKeyRootMarkers = ref(DEFAULT_SHOW_KEY_ROOT_MARKERS);
+
 // Train phase 音生成引擎選擇：'stage' | 'custom' | 'triad'
 const trainingInputMode = ref(DEFAULT_TRAINING_INPUT_MODE);
 const customSequenceArray = ref(createSequenceCards());
@@ -199,6 +205,7 @@ const getDefaultSettings = () => ({
   selectedStage: DEFAULT_STAGE,
   isLeftHanded: DEFAULT_IS_LEFT_HANDED,
   intervalDisplayMode: DEFAULT_INTERVAL_DISPLAY_MODE,
+  showKeyRootMarkers: DEFAULT_SHOW_KEY_ROOT_MARKERS,
   trainingInputMode: DEFAULT_TRAINING_INPUT_MODE,
   selectedTriadStringSet: DEFAULT_TRIAD_STRING_SET,
   selectedTriadDirection: DEFAULT_TRIAD_DIRECTION,
@@ -280,6 +287,11 @@ const applySettingsToState = (settings) => {
     ? 'key'
     : 'chord';
 
+  // 舊版 localStorage 沒有這個欄位時，維持原本的常駐顯示行為。
+  showKeyRootMarkers.value = typeof safeSettings.showKeyRootMarkers === 'boolean'
+    ? safeSettings.showKeyRootMarkers
+    : defaults.showKeyRootMarkers;
+
   // Train phase 引擎模式。
   // 後方互換：舊版只有 isCustomSequenceMode(bool)，沒有 trainingInputMode 欄位時，
   //          true → 'custom'，false → 'stage'。
@@ -339,6 +351,7 @@ const saveSettings = () => {
       selectedStage: selectedStage.value,
       isLeftHanded: isLeftHanded.value,
       intervalDisplayMode: intervalDisplayMode.value,
+      showKeyRootMarkers: showKeyRootMarkers.value,
       trainingInputMode: trainingInputMode.value,
       selectedTriadStringSet: selectedTriadStringSet.value,
       selectedTriadDirection: selectedTriadDirection.value,
@@ -913,6 +926,7 @@ watch([
   selectedStage,
   isLeftHanded,
   intervalDisplayMode,
+  showKeyRootMarkers,
   trainingInputMode,
   selectedTriadStringSet,
   selectedTriadDirection,
@@ -1445,6 +1459,16 @@ const exitTraining = () => {
           </button>
         </div>
 
+        <button
+          @click="showKeyRootMarkers = !showKeyRootMarkers"
+          class="px-3 py-1.5 rounded-xl text-xs font-black border transition-all whitespace-nowrap cursor-pointer"
+          :class="showKeyRootMarkers
+            ? 'bg-zinc-800 text-zinc-200 border-zinc-600'
+            : 'bg-zinc-950/80 text-zinc-500 border-zinc-800 hover:text-zinc-300'"
+        >
+          ■ Key 根音定位 {{ showKeyRootMarkers ? 'ON' : 'OFF' }}
+        </button>
+
         <div class="flex items-center text-zinc-400 font-bold text-xs sm:text-sm whitespace-nowrap">
           目前把位:<span class="text-emerald-400 ml-1.5 text-base sm:text-lg">{{ currentPositionLabel }}</span>
         </div>
@@ -1461,6 +1485,7 @@ const exitTraining = () => {
           :activeNoteTarget="activeNoteTarget"
           :prepChordVoicingNotes="prepChordVoicingNotes"
           :intervalDisplayMode="intervalDisplayMode"
+          :showKeyRootMarkers="showKeyRootMarkers"
         />
       </div>
 

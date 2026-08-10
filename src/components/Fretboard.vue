@@ -25,8 +25,14 @@ const props = defineProps({
   // 指板音程顯示基準：
   // chord = 從目前和弦根音看音程。
   // key = 從目前 Key 根音看音程。
-  intervalDisplayMode: { type: String, default: 'chord' }
+  intervalDisplayMode: { type: String, default: 'chord' },
+
+  // 是否常駐顯示 Key 根音的灰色正方形定位點。
+  showKeyRootMarkers: { type: Boolean, default: true }
 });
+
+// 只有開啟常駐顯示時，才畫沒在發聲的 Key 根音正方形。
+const showKeyRootSquare = (cell) => props.showKeyRootMarkers && cell.note.isKeyRoot;
 
 const totalFrets = 15;
 const strings = [0, 1, 2, 3, 4, 5];
@@ -401,7 +407,7 @@ onUnmounted(() => {
               ></div>
 
               <!-- 音符顯示邏輯：只常駐顯示 key 正方形，其餘音只在播放到時亮起 -->
-              <div v-if="isActiveNote(cell) || cell.note.isKeyRoot || getPrepGhostNote(cell)">
+              <div v-if="isActiveNote(cell) || showKeyRootSquare(cell) || getPrepGhostNote(cell)">
                 
                 <!-- ===== Train 階段：閃爍正在發聲的音 ===== -->
                 <div v-if="props.currentPhase === 'train'">
@@ -422,7 +428,7 @@ onUnmounted(() => {
 
                   <!-- key 根音正方形 (常駐顯示) -->
                   <div 
-                    v-else-if="cell.note.isKeyRoot"
+                    v-else-if="showKeyRootSquare(cell)"
                     class="fretboard-note fretboard-note--dim fretboard-note--square"
                   ></div>
                 </div>
@@ -440,7 +446,7 @@ onUnmounted(() => {
                   </div>
 
                   <div 
-                    v-else-if="cell.note.isKeyRoot"
+                    v-else-if="showKeyRootSquare(cell)"
                     class="fretboard-note fretboard-note--dim fretboard-note--square"
                   ></div>
                 </div>
