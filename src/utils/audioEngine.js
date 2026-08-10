@@ -137,6 +137,44 @@ const METRONOME_CLICK_CONFIG = Object.freeze({
   knockDecaySeconds: 0.028
 });
 
+// 無聲的 WAV data URI（單聲道 / 16-bit / 0.5 秒）。
+// 不額外放二進位資源檔，直接在執行時組出來。
+let silentWavDataUri = null;
+
+const getSilentWavDataUri = () => {
+  if (silentWavDataUri) return silentWavDataUri;
+
+  const sampleRate = 8000;
+  const numSamples = sampleRate / 2;
+  const dataBytes = numSamples * 2;
+  const bytes = new Uint8Array(44 + dataBytes);
+  const view = new DataView(bytes.buffer);
+  const writeAscii = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, dataBytes, true);
+  // 取樣點維持全 0，即為無聲。
+
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+
+  silentWavDataUri = 'data:audio/wav;base64,' + btoa(binary);
+  return silentWavDataUri;
+};
+
 export class AudioEngine {
   constructor() {
     this.audioCtx = null;
@@ -164,14 +202,61 @@ export class AudioEngine {
     this.cagedSequence = [];
     this.prepChordVoicingNotes = [];
     this.currentCagedCycle = 0;
+    this._silentAudio = null;
     
     this.onBeatTrigger = null; 
   }
 
   init() {
+    // iOS 16.4+ / Safari 16.4+：宣告為 playback 類別，讓聲音無視實體靜音開關。
+    // 必須在建立 AudioContext 之前設定。
+    try {
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    } catch (e) {
+      console.warn('設定 audioSession 失敗：', e);
+    }
+
     if (!this.audioCtx) {
       this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
+
+    this.startSilentLoop();
+    this.resumeIfNeeded();
+  }
+
+  // Safari 16.4 以前沒有 audioSession API，
+  // 只能靠「持續播放一個無聲 <audio>」把頁面的音訊 session 升級成 playback。
+  startSilentLoop() {
+    try {
+      if (!this._silentAudio) {
+        const el = new Audio(getSilentWavDataUri());
+        el.loop = true;
+        el.preload = 'auto';
+        el.setAttribute('playsinline', '');
+        this._silentAudio = el;
+      }
+      const playPromise = this._silentAudio.play();
+      if (playPromise && playPromise.catch) playPromise.catch(() => {});
+    } catch (e) {
+      console.warn('無聲音軌啟動失敗：', e);
+    }
+  }
+
+  releaseSilentLoop() {
+    if (this._silentAudio) this._silentAudio.pause();
+  }
+
+  // iOS 在來電 / 鎖定 / 切到背景後會把 AudioContext 留在 suspended 或 interrupted，
+  // 不主動 resume 就會一直沒聲音。
+  resumeIfNeeded() {
+    if (!this.audioCtx) return;
+
+    if (this.audioCtx.state !== 'running') {
+      const resumePromise = this.audioCtx.resume();
+      if (resumePromise && resumePromise.catch) resumePromise.catch(() => {});
+    }
+
+    if (this._silentAudio && this._silentAudio.paused) this.startSilentLoop();
   }
 
   setBPM(newBPM) {

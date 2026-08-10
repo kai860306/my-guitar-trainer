@@ -115,6 +115,7 @@
    * **音程顯示基準切換**：提供「從 Chord」／「從 Key」二選一按鈕，即時切換指板音程顯示基準（`intervalDisplayMode`）：從 Chord 時音程數字相對於目前和弦根音（例如 V 和弦上 G 顯示 `1`）；從 Key 時音程數字相對於主調 Key 根音（例如 C Key 裡 G 顯示 `5`）。此設定會保存於 `localStorage`。
    * **Key 根音定位點常駐顯示開關**：訓練畫面提供「■ Key 根音定位 ON / OFF」切換鈕（`showKeyRootMarkers`）。ON（預設）時主調根音以灰色正方形常駐顯示為定位基準；OFF 時這些正方形不再常駐，只在實際播放到（Train）或 Prep 和弦指型提示裡才出現，用來驗證是否真的背下把位。此設定會保存於 `localStorage`。
    * 目前實作沒有訓練畫面內的超大暫停 / 恢復鍵；暫停邏輯存在於音訊引擎 `toggle()`，但 UI 只有進入訓練前的開始按鈕與訓練中的退出按鈕。
+   * **畫面旋轉（直向 / 橫向）**：按鈕位於**首頁標題列、全螢幕按鈕旁邊**，切換 `isForcedLandscape`。旋轉對象是 **App 最外層容器，因此首頁與特訓畫面會一起轉**（`.app-rotated`）。**不使用 Fullscreen API、不使用 `screen.orientation.lock()`，也不讀取裝置實體方向**（iOS Safari 兩個 API 均不支援），完全以 CSS `transform: rotate(90deg)` 處理，因此不挑機種與瀏覽器。旋轉後 safe-area inset 會對換（local top / right / bottom / left → 實體 right / bottom / left / top），特訓畫面改吃滿已旋轉的外框並套用與橫屏 media query 同等的版面壓縮。拖曳時的插入縫隙判定與浮動字卡定位也會改拿旋轉後的軸換算。此設定會保存於 `localStorage`。
 4. **安全區與不捲動版面**：
    * 訓練畫面使用 `100dvh`、`overflow: hidden` 與 iOS safe-area padding，目標是在 PC、iPad 橫屏與 iPhone 橫屏中不需上下捲動即可看到主要資訊。
 
@@ -135,6 +136,11 @@
 * 音訊引擎使用 Web Audio API，排程器以 25ms lookahead 週期運作，並提前約 0.1 秒排程下一批音符。
 * 撥弦音色以兩個微 detune oscillator、泛音週期波、音量包絡、低通濾波、短 delay feedback、dry / wet 混合與極輕微 LFO 組合而成。
 * 停止播放時會清除排程 timer，並呼叫 `speechSynthesis.cancel()` 作為保險；但目前沒有實際排程語音播報。
+
+### 3.2 行動裝置音訊相容性（iOS 靜音開關 / 中斷復原）
+* **靜音開關**：iOS 的 Web Audio 預設走 ambient 音訊類別，實體靜音開關打開時即使插耳機也不會有聲音。`AudioEngine.init()` 因此在建立 `AudioContext` **之前**先設定 `navigator.audioSession.type = 'playback'`（Safari 16.4+ 的正式 API），讓輸出無視靜音開關。
+* **舊版後備**：Safari 16.4 以前沒有 `audioSession`，改以一個循環播放的無聲 `<audio>` 元素（執行時組出的 WAV data URI，不額外放二進位資源檔）把整頁音訊 session 升級成 playback。退出特訓時會 `releaseSilentLoop()` 停掉，不留下鎖定畫面的播放控制器。
+* **中斷復原**：來電、鎖定螢幕、切到背景都可能讓 `AudioContext` 停在 `suspended` / `interrupted`。引擎提供 `resumeIfNeeded()`，在 `init()` 與前台復歸時（`visibilitychange` / `focus`）呼叫，需要時 `resume()` 並重啟無聲音軌。
 
 ---
 
@@ -183,6 +189,8 @@
 * 階梯解鎖規則修正為 `chord`（Stage 1-5：Triad → 7th / 9th / 11th / 13th）與 `scale`（Stage 1-3：Triad → Pentatonic → Mode Scale）雙模式，取代原本單一 Stage 1-5 描述；Stage 上限依模式各自為 5 與 3。
 * 補充訓練畫面「音程顯示基準」（從 Chord / 從 Key）切換功能，並列入 `localStorage` 保存項目。
 * 新增訓練畫面「Key 根音定位點常駐顯示」ON / OFF 切換（`showKeyRootMarkers`），並列入 `localStorage` 保存項目。
+* 新增首頁（全螢幕按鈕旁）的「畫面：直向 / 橫向」切換（`isForcedLandscape`）：純 CSS 旋轉整個 App（首頁 + 特訓畫面）、不依賴 Fullscreen API / orientation lock / 裝置實體方向，並列入 `localStorage` 保存項目。
+* 新增行動裝置音訊相容處理：`navigator.audioSession.type = 'playback'`、無聲循環 `<audio>` 後備，以及 `resumeIfNeeded()` 的中斷復原。
 * 移除 `vii°7` 已實作的錯誤描述；目前和弦庫沒有此字卡，`dim7` 僅為預留的 label / voicing，尚未被任何和弦使用。
 * 新增第三種音序引擎「三和弦琶音」（`triad`）：在選定的連續三弦組（`1-3` / `2-4` / `3-5` / `4-6`）上，以最小琴格移動（Voice Leading）自動選出轉回形彈奏和弦進行。音序引擎切換由原本的布林 `isCustomSequenceMode` 改為三選一的 `trainingInputMode`（`stage` / `custom` / `triad`），並保存 `selectedTriadStringSet`，同時提供舊設定的後方相容遷移。
 * CAGED scale shape 由手寫改為演算法生成（僅手寫各 form 幾何 `CAGED_FORM_GEOMETRY`），並保證同音異弦為零。

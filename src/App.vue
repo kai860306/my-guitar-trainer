@@ -50,6 +50,9 @@ const DEFAULT_INTERVAL_DISPLAY_MODE = 'chord';
 // 預設是否常駐顯示 Key 根音定位正方形。
 const DEFAULT_SHOW_KEY_ROOT_MARKERS = true;
 
+// 預設畫面是否以 CSS 轉成橫向。
+const DEFAULT_IS_FORCED_LANDSCAPE = false;
+
 // 預設 Train phase 音生成引擎。
 // stage  = 階梯爬升解鎖（chord / scale 的 stageMode）
 // custom = 自訂音序器
@@ -156,6 +159,9 @@ const intervalDisplayMode = ref(DEFAULT_INTERVAL_DISPLAY_MODE);
 // 指板上是否常駐顯示 Key 根音的灰色正方形定位點。
 const showKeyRootMarkers = ref(DEFAULT_SHOW_KEY_ROOT_MARKERS);
 
+// 用 CSS transform 把整個 App 畫面轉 90 度。完全由按鈕控制，不看裝置目前的實體方向。
+const isForcedLandscape = ref(DEFAULT_IS_FORCED_LANDSCAPE);
+
 // Train phase 音生成引擎選擇：'stage' | 'custom' | 'triad'
 const trainingInputMode = ref(DEFAULT_TRAINING_INPUT_MODE);
 const customSequenceArray = ref(createSequenceCards());
@@ -206,6 +212,7 @@ const getDefaultSettings = () => ({
   isLeftHanded: DEFAULT_IS_LEFT_HANDED,
   intervalDisplayMode: DEFAULT_INTERVAL_DISPLAY_MODE,
   showKeyRootMarkers: DEFAULT_SHOW_KEY_ROOT_MARKERS,
+  isForcedLandscape: DEFAULT_IS_FORCED_LANDSCAPE,
   trainingInputMode: DEFAULT_TRAINING_INPUT_MODE,
   selectedTriadStringSet: DEFAULT_TRIAD_STRING_SET,
   selectedTriadDirection: DEFAULT_TRIAD_DIRECTION,
@@ -292,6 +299,8 @@ const applySettingsToState = (settings) => {
     ? safeSettings.showKeyRootMarkers
     : defaults.showKeyRootMarkers;
 
+  isForcedLandscape.value = Boolean(safeSettings.isForcedLandscape);
+
   // Train phase 引擎模式。
   // 後方互換：舊版只有 isCustomSequenceMode(bool)，沒有 trainingInputMode 欄位時，
   //          true → 'custom'，false → 'stage'。
@@ -352,6 +361,7 @@ const saveSettings = () => {
       isLeftHanded: isLeftHanded.value,
       intervalDisplayMode: intervalDisplayMode.value,
       showKeyRootMarkers: showKeyRootMarkers.value,
+      isForcedLandscape: isForcedLandscape.value,
       trainingInputMode: trainingInputMode.value,
       selectedTriadStringSet: selectedTriadStringSet.value,
       selectedTriadDirection: selectedTriadDirection.value,
@@ -393,7 +403,16 @@ onMounted(() => {
 
   document.addEventListener('fullscreenchange', syncFullscreenState);
   document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+  document.addEventListener('visibilitychange', resumeAudioIfNeeded);
+  window.addEventListener('focus', resumeAudioIfNeeded);
 });
+
+// 回到前台時重新喚醒音訊：iOS 在來電 / 鎖定 / 切背景後會把 AudioContext 留在非 running 狀態。
+const resumeAudioIfNeeded = () => {
+  if (!trainerAudio || !isPlaying.value) return;
+  if (document.visibilityState !== 'visible') return;
+  trainerAudio.resumeIfNeeded();
+};
 
 // 🖥️ 全螢幕顯示
 const isFullscreen = ref(false);
@@ -402,21 +421,37 @@ const syncFullscreenState = () => {
   isFullscreen.value = !!(document.fullscreenElement || document.webkitFullscreenElement);
 };
 
-const toggleFullscreen = async () => {
+const requestFullscreen = async () => {
+  const el = document.documentElement;
   try {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      if (el.requestFullscreen) await el.requestFullscreen();
-      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-    } else {
-      if (document.exitFullscreen) await document.exitFullscreen();
-      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-    }
+    if (el.requestFullscreen) await el.requestFullscreen();
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
   } catch (e) {
-    // 部分行動瀏覽器 (如 iOS Safari) 不支援 Fullscreen API，
-    // 已透過 meta 標籤提供「加入主畫面」全螢幕的後備方案。
     console.warn('Fullscreen API 不被支援：', e);
   }
+};
+
+const exitFullscreen = async () => {
+  try {
+    if (document.exitFullscreen) await document.exitFullscreen();
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  } catch (e) {
+    console.warn('離開全螢幕失敗：', e);
+  }
+};
+
+const toggleFullscreen = async () => {
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+    await requestFullscreen();
+  } else {
+    await exitFullscreen();
+  }
+};
+
+// 🔄 畫面旋轉：不依賴 Fullscreen API / screen.orientation.lock()（iOS Safari 都不支援），
+//    單純切換旗標，實際旋轉全交給 CSS。
+const toggleForcedLandscape = () => {
+  isForcedLandscape.value = !isForcedLandscape.value;
 };
 
 // 清單「id → 級數陣列」查找表。
@@ -439,8 +474,9 @@ const getActiveProgression = () => {
     || ['I'];
 };
 
-// 依指針位置計算插入縫隙索引
-const updateActiveGapByConfig = (clientX, containerRef, gapRef, cardSelector) => {
+// 依指針位置計算插入縫隙索引。
+// 畫面旋轉 90 度後，字卡列的「左→右」對應到螢幕的「上→下」，因此改拿 Y 軸比對。
+const updateActiveGapByConfig = (pointerPos, containerRef, gapRef, cardSelector) => {
   const container = containerRef.value;
   if (!container) { gapRef.value = null; return; }
 
@@ -452,18 +488,20 @@ const updateActiveGapByConfig = (clientX, containerRef, gapRef, cardSelector) =>
   let targetIndex = cards.length;
   for (let i = 0; i < cards.length; i++) {
     const rect = cards[i].getBoundingClientRect();
-    const cardCenter = rect.left + rect.width / 2;
-    if (clientX < cardCenter) { targetIndex = i; break; }
+    const cardCenter = isForcedLandscape.value
+      ? rect.top + rect.height / 2
+      : rect.left + rect.width / 2;
+    if (pointerPos < cardCenter) { targetIndex = i; break; }
   }
   gapRef.value = targetIndex;
 };
 
-const updateActiveGap = (clientX) => {
-  updateActiveGapByConfig(clientX, progContainerRef, activeGap, '[data-prog-card]');
+const updateActiveGap = (pointerPos) => {
+  updateActiveGapByConfig(pointerPos, progContainerRef, activeGap, '[data-prog-card]');
 };
 
-const updateActiveSequenceGap = (clientX) => {
-  updateActiveGapByConfig(clientX, sequenceContainerRef, activeSequenceGap, '[data-sequence-card]');
+const updateActiveSequenceGap = (pointerPos) => {
+  updateActiveGapByConfig(pointerPos, sequenceContainerRef, activeSequenceGap, '[data-sequence-card]');
 };
 
 const resetDragState = () => {
@@ -471,6 +509,17 @@ const resetDragState = () => {
   activeGap.value = null;
   activeSequenceGap.value = null;
 };
+
+// 旋轉後的 position: fixed 會以已旋轉的容器為定位基準，
+// 因此指針的螢幕座標要先換算回該座標系（local x = 螢幕 y、local y = 螢幕寬 - 螢幕 x）。
+const dragGhostStyle = computed(() => {
+  const st = dragState.value;
+  if (!st) return null;
+
+  return isForcedLandscape.value
+    ? { left: st.y + 'px', top: (window.innerWidth - st.x) + 'px' }
+    : { left: st.x + 'px', top: st.y + 'px' };
+});
 
 const isProgressionDragSource = (source) => {
   return source === 'library' || source === 'progression';
@@ -506,10 +555,11 @@ const onDragPointerMove = (e) => {
   }
   e.preventDefault();
 
+  const pointerPos = isForcedLandscape.value ? e.clientY : e.clientX;
   if (isProgressionDragSource(st.source)) {
-    updateActiveGap(e.clientX);
+    updateActiveGap(pointerPos);
   } else if (isSequenceDragSource(st.source)) {
-    updateActiveSequenceGap(e.clientX);
+    updateActiveSequenceGap(pointerPos);
   }
 };
 
@@ -927,6 +977,7 @@ watch([
   isLeftHanded,
   intervalDisplayMode,
   showKeyRootMarkers,
+  isForcedLandscape,
   trainingInputMode,
   selectedTriadStringSet,
   selectedTriadDirection,
@@ -1032,6 +1083,7 @@ const exitTraining = () => {
     trainerAudio.currentGlobalBeat = 0;
     trainerAudio.currentChordBeat = 0;
     trainerAudio.currentCagedCycle = 0;
+    trainerAudio.releaseSilentLoop();
   }
 };
 </script>
@@ -1039,19 +1091,19 @@ const exitTraining = () => {
 <template>
   <div
     class="min-h-[100dvh] bg-black text-white font-sans selection:bg-emerald-500 selection:text-black"
-    :class="isTrainingActive ? 'h-[100dvh] overflow-hidden' : 'p-4'"
+    :class="[isTrainingActive ? 'h-[100dvh] overflow-hidden' : '', { 'app-rotated': isForcedLandscape }]"
   >
 
     <!-- 拖曳中跟隨指針的浮動字卡 (滑鼠 + 觸控通用) -->
     <div 
       v-if="dragState && dragState.dragging"
       class="drag-ghost"
-      :style="{ left: dragState.x + 'px', top: dragState.y + 'px' }"
+      :style="dragGhostStyle"
     >
       {{ dragState.label }}
     </div>
     
-    <div v-if="!isTrainingActive" class="max-w-3xl mx-auto space-y-6 pt-4 pb-12">
+    <div v-if="!isTrainingActive" class="max-w-3xl mx-auto space-y-6 px-4 pt-8 pb-16">
       
       <div class="flex justify-between items-center border-b border-zinc-800 pb-4">
         <h1 class="text-2xl font-black text-emerald-400 tracking-wider">⚡ CAGED 有氧吉他特訓核心</h1>
@@ -1062,6 +1114,14 @@ const exitTraining = () => {
             :title="isFullscreen ? '退出全螢幕' : '全螢幕顯示'"
           >
             {{ isFullscreen ? '🗗 退出全螢幕' : '⛶ 全螢幕' }}
+          </button>
+          <button 
+            @click="toggleForcedLandscape"
+            class="px-4 py-2 text-xs font-bold rounded-lg border transition-all"
+            :class="isForcedLandscape ? 'bg-emerald-500 border-emerald-400 text-black' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500'"
+            title="把整個畫面以 CSS 轉 90 度；不依賴裝置實體方向"
+          >
+            {{ isForcedLandscape ? '⟲ 畫面：橫向' : '⟳ 畫面：直向' }}
           </button>
           <button 
             @click="isLeftHanded = !isLeftHanded"
@@ -1630,5 +1690,65 @@ const exitTraining = () => {
     font-size: 0.7rem !important;
     margin-top: 0.1rem !important;
   }
+}
+
+/* ============================================
+   強制橫向：不依賴 Fullscreen API、screen.orientation.lock()，也不看裝置實體方向，
+   純粹由按鈕控制，用 CSS 把「整個 App」(首頁與特訓畫面) 轉 90 度。
+   旋轉後 local 的 top / right / bottom / left 依序對應到實體螢幕的
+   right / bottom / left / top，safe-area inset 也必須跟著對調。
+   ============================================ */
+.app-rotated {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 40;
+  width: 100dvh;
+  height: 100vw;
+  min-height: 100vw;
+  overflow-x: hidden;
+  overflow-y: auto;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+  padding-top: env(safe-area-inset-right);
+  padding-right: env(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-left);
+  padding-left: env(safe-area-inset-top);
+}
+
+/* 特訓畫面改吃滿已旋轉的外框；安全區已由外框處理，這裡只留基本內距。 */
+.app-rotated .training-screen {
+  height: 100%;
+  padding: 0.35rem 0.25rem;
+  gap: 0.25rem;
+}
+
+/* 旋轉後版面變矮，套用與橫屏 media query 同等的空間壓縮。 */
+.app-rotated .train-fretboard-wrap {
+  padding-bottom: 0.15rem;
+}
+
+.app-rotated .train-header {
+  padding-top: 0.1rem !important;
+  padding-bottom: 0.1rem !important;
+}
+
+.app-rotated .train-dots {
+  margin-bottom: 0.35rem !important;
+  gap: 0.6rem !important;
+}
+
+.app-rotated .train-prog {
+  margin-bottom: 0.4rem !important;
+}
+
+.app-rotated .chord-big {
+  font-size: 2.5rem !important;
+  line-height: 1 !important;
+}
+
+.app-rotated .train-subtitle {
+  font-size: 0.7rem !important;
+  margin-top: 0.1rem !important;
 }
 </style>
